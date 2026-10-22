@@ -5,9 +5,10 @@
       "command": "node",
       "args": ["dist/index.js"],
       "env": {
-        "CB_URL": "https://your-codebeamer-instance.example.com/cb/api",
-        "CB_USERNAME": "your-username",
-        "CB_PASSWORD": "your-password"
+        "CB_URL": "${CB_URL:-}",
+        "CB_USERNAME": "${CB_USERNAME:-}",
+        "CB_PASSWORD": "${CB_PASSWORD:-}",
+        "CB_MODE": "${CB_MODE:-read}"
       }
     }
   }

@@ -96,13 +96,133 @@ Every tool carries MCP annotations (`readOnlyHint` / `destructiveHint`), so clie
 
 ## Installation
 
-> **Not on npm yet.** The `npx` / `npm install -g` commands below work once `@xwarestack/codebeamer-mcp` is published (push a `v*` tag; requires the `xwarestack` npm organization and the `NPM_TOKEN` secret). Until then, build a package file with `npm run build && npm pack`, install it with `npm install -g ./xwarestack-codebeamer-mcp-<version>.tgz`, and use `"command": "node"` with the full path to its `dist/index.js` (find it with `npm root -g`).
-
 ### Requirements
-- Node.js 20+
-- Access to a Codebeamer instance (URL, username, password)
 
-### Claude Code (CLI)
+- Node.js 20+ and Git
+- An MCP client: Claude Code (CLI or VS Code extension), Claude Desktop, VS Code with GitHub Copilot, Cursor, …
+- Network access to your Codebeamer instance (VPN if it is internal) and an account. Configuration review needs project admin rights.
+
+The package is **not published to npm yet**, so install from source (option A). The npm setups (option B) work after the first release.
+
+### Option A: from source (use this today)
+
+#### 1. Clone and build
+
+Clone **this** repository, `xwarestack/codebeamer-mcp`, on its default branch `master`. The original `3KniGHtcZ/codebeamer-mcp` does not contain the configuration review, comparison and API tools.
+
+```bash
+git clone https://github.com/xwarestack/codebeamer-mcp.git
+cd codebeamer-mcp
+npm ci
+npm run build
+```
+
+`dist/` is not in Git: run `npm run build` after the clone and again after every `git pull`.
+
+The server is started by your MCP client with `node <repo>/dist/index.js`. Use the full path when the client is not started inside the repository.
+
+#### 2a. Claude Code (CLI or VS Code extension)
+
+The repository contains a [.mcp.json](.mcp.json) that Claude Code picks up when started inside the repository. It reads the connection from environment variables, so no credentials are stored in the file. Set them once per machine, e.g. in PowerShell:
+
+```powershell
+[Environment]::SetEnvironmentVariable("CB_URL", "https://your-instance.example.com/cb/api", "User")
+[Environment]::SetEnvironmentVariable("CB_USERNAME", "your_username", "User")
+[Environment]::SetEnvironmentVariable("CB_PASSWORD", "your_password", "User")
+# optional, default is read
+[Environment]::SetEnvironmentVariable("CB_MODE", "read", "User")
+```
+
+Restart the terminal (or VS Code) so new processes see them.
+
+To use the server from any folder instead, register it for your user:
+
+```powershell
+claude mcp add codebeamer --scope user `
+  -e CB_URL=https://your-instance.example.com/cb/api `
+  -e CB_USERNAME=your_username -e CB_PASSWORD=your_password `
+  -- node "C:\path\to\codebeamer-mcp\dist\index.js"
+```
+
+> Inside the repository, the project's `.mcp.json` server (also named `codebeamer`) takes precedence over a user-scoped one. Either set the environment variables above, or register yours with `--scope local` when working in the repository.
+
+Check with `claude mcp list` (or `/mcp` in a session) that `codebeamer` is connected.
+
+#### 2b. VS Code with GitHub Copilot
+
+Copilot reads `.vscode/mcp.json`, not `.mcp.json`. Create it in the cloned repository (it is git-ignored):
+
+```json
+{
+  "inputs": [
+    { "type": "promptString", "id": "cb-password", "description": "Codebeamer password", "password": true }
+  ],
+  "servers": {
+    "codebeamer": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/dist/index.js"],
+      "env": {
+        "CB_URL": "https://your-instance.example.com/cb/api",
+        "CB_USERNAME": "your_username",
+        "CB_PASSWORD": "${input:cb-password}",
+        "CB_MODE": "read"
+      }
+    }
+  }
+}
+```
+
+VS Code asks for the password on first start and stores it securely. Start the server from the **MCP: List Servers** command or the Start link above the server entry, then use the tools in Copilot Chat's agent mode.
+
+#### 2c. Claude Desktop
+
+Add to `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) and restart Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "codebeamer": {
+      "command": "node",
+      "args": ["C:\\path\\to\\codebeamer-mcp\\dist\\index.js"],
+      "env": {
+        "CB_URL": "https://your-instance.example.com/cb/api",
+        "CB_USERNAME": "your_username",
+        "CB_PASSWORD": "your_password"
+      }
+    }
+  }
+}
+```
+
+#### 3. Test it
+
+Ask the assistant, for example: *"List the Codebeamer projects"*, *"Show the configuration of tracker 1234"*, *"Compare tracker 1234 with its template"*.
+
+To try every tool without an AI client, use the MCP Inspector, which opens in the browser:
+
+```powershell
+$env:CB_URL="https://your-instance.example.com/cb/api"; $env:CB_USERNAME="your_username"; $env:CB_PASSWORD="your_password"
+npm run inspect
+```
+
+#### Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| Server shows as failed / "Connection closed" | `dist/` not built (`npm run build`), or `CB_URL` / `CB_USERNAME` / `CB_PASSWORD` not set for the client process. Run `node dist/index.js` in a terminal to see the error. |
+| "Cannot connect to Codebeamer" | Wrong `CB_URL` (it must include `/cb/api`), or the machine cannot reach the server (VPN, proxy, firewall). |
+| "Authentication failed" | Wrong username or password. |
+| Configuration tools report "Forbidden" or "Not available" sections | The account lacks project admin rights for that tracker. |
+| Write tools are missing | The server runs with `CB_MODE=read` (default); see [Access modes](#access-modes). |
+
+> ⚠️ **Never commit real credentials.** `.mcp.json` is committed and only references environment variables; keep it that way. `.vscode/` files with credentials stay local.
+
+### Option B: from npm (after the first release)
+
+Once `@xwarestack/codebeamer-mcp` is published (push a `v*` tag; requires the `xwarestack` npm organization and the `NPM_TOKEN` secret), no clone is needed: MCP clients start it with `npx`.
+
+#### Claude Code (CLI)
 
 The fastest way — run this command in your terminal:
 
@@ -112,7 +232,7 @@ claude mcp add codebeamer -e CB_URL=https://your-instance.example.com/cb/api \
   -- npx -y @xwarestack/codebeamer-mcp
 ```
 
-Or add it manually to `.mcp.json` in the project root (or `~/.claude/mcp.json` for global scope):
+Add `--scope user` to make it available in every project, or add it manually to `.mcp.json` in a project root:
 
 ```json
 {
@@ -131,7 +251,7 @@ Or add it manually to `.mcp.json` in the project root (or `~/.claude/mcp.json` f
 }
 ```
 
-### Claude Desktop
+#### Claude Desktop
 
 Edit the config file for your platform:
 
@@ -159,7 +279,7 @@ Edit the config file for your platform:
 
 Restart Claude Desktop after saving.
 
-### Cursor
+#### Cursor
 
 Add to `.cursor/mcp.json` in the project root (project scope) or `~/.cursor/mcp.json` (global):
 
@@ -179,7 +299,7 @@ Add to `.cursor/mcp.json` in the project root (project scope) or `~/.cursor/mcp.
 }
 ```
 
-### Windsurf
+#### Windsurf
 
 Add to `~/.codeium/windsurf/mcp_config.json`:
 
@@ -199,7 +319,7 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
 }
 ```
 
-### VS Code (Copilot)
+#### VS Code (Copilot)
 
 Add to `.vscode/mcp.json` in the project root:
 
@@ -220,7 +340,7 @@ Add to `.vscode/mcp.json` in the project root:
 }
 ```
 
-### Gemini CLI
+#### Gemini CLI
 
 Add to `~/.gemini/settings.json`:
 
@@ -240,7 +360,7 @@ Add to `~/.gemini/settings.json`:
 }
 ```
 
-### Alternative: global install
+#### Alternative: global install
 
 ```bash
 npm install -g @xwarestack/codebeamer-mcp
@@ -248,32 +368,19 @@ npm install -g @xwarestack/codebeamer-mcp
 
 Then use `"command": "codebeamer-mcp"` (no `args`) instead of `npx` in any config above.
 
-### Pinning a specific version
+#### Pinning a specific version
 
 ```json
 "args": ["-y", "@xwarestack/codebeamer-mcp@0.6.0"]
 ```
 
-### Updates
+#### Updates
 
 | Method | Update behavior |
 |---|---|
 | `npx -y @xwarestack/codebeamer-mcp` | Always fetches the latest version |
 | `npm install -g @xwarestack/codebeamer-mcp` | Stays on installed version. Run `npm update -g @xwarestack/codebeamer-mcp` to update |
 | Pinned version (`@0.6.0`) | Never auto-updates; change the version string manually |
-
-> ⚠️ **Never commit `.mcp.json` with real credentials** — it is listed in `.gitignore`.
-
-### From source (development)
-
-```bash
-git clone https://github.com/xwarestack/codebeamer-mcp.git
-cd codebeamer-mcp
-npm install
-npm run build
-```
-
-Then use `"command": "node"` with `"args": ["dist/index.js"]` in your `.mcp.json`.
 
 ## Development & Testing
 

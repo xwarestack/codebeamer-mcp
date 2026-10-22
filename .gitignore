@@ -15,3 +15,6 @@ logs/
 .worktrees/
 .security-key
 logs/security/
+
+# Local MCP client config (may contain credentials)
+.vscode/mcp.json
