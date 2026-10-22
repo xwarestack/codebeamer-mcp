@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CodebeamerClient } from "../client/codebeamer-client.js";
+import { READ_ONLY } from "./annotations.js";
 import {
   formatItemList,
   formatItemSummary,
@@ -38,10 +39,12 @@ export function registerItemTools(
           .default(25)
           .describe("Items per page (max 50)"),
       },
+      annotations: READ_ONLY,
     },
     async ({ query, page, pageSize }) => {
       const result = await client.searchItems(query, page, pageSize);
-      return { content: [{ type: "text", text: formatItemList(result) }] };
+      const text = formatItemList(result.items, { total: result.total, page, pageSize });
+      return { content: [{ type: "text", text }] };
     },
   );
 
@@ -72,10 +75,11 @@ export function registerItemTools(
           .default(25)
           .describe("Items per page (max 50)"),
       },
+      annotations: READ_ONLY,
     },
     async ({ trackerId, page, pageSize }) => {
-      const { items, debug } = await client.listTrackerItems(trackerId, page, pageSize);
-      let text = formatItemList(items);
+      const { items, total, debug } = await client.listTrackerItems(trackerId, page, pageSize);
+      let text = formatItemList(items, { total, page, pageSize });
       if (items.length === 0 && debug) {
         text += `\n\n---\n**Debug (raw API responses):**\n\`\`\`\n${debug}\n\`\`\``;
       }
@@ -98,6 +102,7 @@ export function registerItemTools(
           .positive()
           .describe("Numeric item (work item) ID"),
       },
+      annotations: READ_ONLY,
     },
     async ({ itemId }) => {
       const item = await client.getItem(itemId);

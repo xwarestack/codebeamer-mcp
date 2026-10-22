@@ -5,6 +5,7 @@ import {
   formatProjectList,
   formatProject,
 } from "../formatters/project-formatter.js";
+import { READ_ONLY } from "./annotations.js";
 
 export function registerProjectTools(
   server: McpServer,
@@ -18,24 +19,11 @@ export function registerProjectTools(
         "List all Codebeamer projects the authenticated user can access. " +
         "Returns a summary table with project IDs, names, and keys. " +
         "Use the returned IDs to fetch trackers or items.",
-      inputSchema: {
-        page: z
-          .number()
-          .int()
-          .min(1)
-          .default(1)
-          .describe("Page number (starts at 1)"),
-        pageSize: z
-          .number()
-          .int()
-          .min(1)
-          .max(100)
-          .default(25)
-          .describe("Items per page (max 100)"),
-      },
+      inputSchema: {},
+      annotations: READ_ONLY,
     },
-    async ({ page, pageSize }) => {
-      const result = await client.listProjects(page, pageSize);
+    async () => {
+      const result = await client.listProjects();
       return { content: [{ type: "text", text: formatProjectList(result) }] };
     },
   );
@@ -53,6 +41,7 @@ export function registerProjectTools(
           .positive()
           .describe("Numeric Codebeamer project ID"),
       },
+      annotations: READ_ONLY,
     },
     async ({ projectId }) => {
       const project = await client.getProject(projectId);

@@ -107,15 +107,76 @@ describe("HttpClient", () => {
     await expect(client.get("/secret")).rejects.toThrow(CbForbiddenError);
   });
 
-  it("maps 429 to CbRateLimitError", async () => {
+  it("maps 429 to CbRateLimitError after retrying", async () => {
+    let calls = 0;
     mockServer.use(
-      http.get(`${BASE}/limited`, () =>
-        HttpResponse.json({}, { status: 429 }),
+      http.get(`${BASE}/limited`, () => {
+        calls++;
+        return HttpResponse.json({}, { status: 429 });
+      }),
+    );
+
+    const client = new HttpClient({ baseUrl: BASE, username: "u", password: "p", retryDelayMs: 0 });
+    await expect(client.get("/limited")).rejects.toThrow(CbRateLimitError);
+    expect(calls).toBe(3);
+  });
+
+  it("retries a 429 and returns the later successful response", async () => {
+    let calls = 0;
+    mockServer.use(
+      http.get(`${BASE}/flaky`, () => {
+        calls++;
+        return calls === 1
+          ? HttpResponse.json({}, { status: 429, headers: { "Retry-After": "0" } })
+          : HttpResponse.json({ ok: true });
+      }),
+    );
+
+    const client = makeClient();
+    await expect(client.get("/flaky")).resolves.toEqual({ ok: true });
+    expect(calls).toBe(2);
+  });
+
+  it("fails with a clear message when the server does not answer in time", async () => {
+    mockServer.use(
+      http.get(`${BASE}/slow`, async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+
+    const client = new HttpClient({ baseUrl: BASE, username: "u", password: "p", timeoutMs: 20 });
+    await expect(client.get("/slow")).rejects.toThrow(/did not respond within 20 ms/);
+  });
+
+  it("repeats array query params", async () => {
+    let receivedUrl = "";
+    mockServer.use(
+      http.get(`${BASE}/multi`, ({ request }) => {
+        receivedUrl = request.url;
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+
+    await makeClient().get("/multi", { params: { ids: [1, 2] } });
+    expect(new URL(receivedUrl).searchParams.getAll("ids")).toEqual(["1", "2"]);
+  });
+
+  it("send() decodes non-JSON responses by content type", async () => {
+    mockServer.use(
+      http.get(`${BASE}/text`, () => HttpResponse.text("hello")),
+      http.get(`${BASE}/binary`, () =>
+        new HttpResponse(new Uint8Array([1, 2, 3]), { headers: { "Content-Type": "application/octet-stream" } }),
       ),
     );
 
     const client = makeClient();
-    await expect(client.get("/limited")).rejects.toThrow(CbRateLimitError);
+    expect((await client.send("GET", "/text")).body).toBe("hello");
+    expect((await client.send("GET", "/binary")).body).toEqual({
+      binary: true,
+      contentType: "application/octet-stream",
+      bytes: 3,
+    });
   });
 
   it("maps 400 to CbValidationError", async () => {

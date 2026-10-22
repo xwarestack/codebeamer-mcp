@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CodebeamerClient } from "../client/codebeamer-client.js";
+import { ADDITIVE_WRITE } from "./annotations.js";
 
 export function registerAssociationWriteTools(
   server: McpServer,
@@ -37,6 +38,7 @@ export function registerAssociationWriteTools(
           .optional()
           .describe("Optional description for the association"),
       },
+      annotations: ADDITIVE_WRITE,
     },
     async ({ fromItemId, toItemId, typeId, description }) => {
       const result = await client.createAssociation({
@@ -76,6 +78,7 @@ export function registerAssociationWriteTools(
           .positive()
           .describe("Item ID to reference as downstream"),
       },
+      annotations: ADDITIVE_WRITE,
     },
     async ({ fromItemId, toItemId }) => {
       await client.createDownstreamReference(fromItemId, toItemId);

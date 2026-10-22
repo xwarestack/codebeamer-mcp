@@ -20,7 +20,7 @@ function makeClient() {
 describe("list_trackers", () => {
   it("returns formatted tracker list", async () => {
     const client = makeClient();
-    const result = await client.listTrackers(1, 1, 25);
+    const result = await client.listTrackers(1);
     const text = formatTrackerList(result);
 
     expect(text).toContain("## Trackers");

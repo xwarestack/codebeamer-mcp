@@ -1,5 +1,5 @@
 {
-  "name": "codebeamer-mcp",
+  "name": "@xwarestack/codebeamer-mcp",
   "version": "0.5.2",
   "description": "MCP server for Codebeamer ALM with read and write capabilities",
   "license": "MIT",
@@ -17,13 +17,14 @@
   },
   "files": [
     "dist",
+    "docs/codebeamer-openapi-v3.json",
     "package.json"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/3KniGHtcZ/codebeamer-mcp.git"
+    "url": "https://github.com/xwarestack/codebeamer-mcp.git"
   },
-  "homepage": "https://github.com/3KniGHtcZ/codebeamer-mcp#readme",
+  "homepage": "https://github.com/xwarestack/codebeamer-mcp#readme",
   "keywords": [
     "mcp",
     "codebeamer",

@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CodebeamerClient } from "../client/codebeamer-client.js";
 import { formatComments } from "../formatters/item-formatter.js";
+import { ADDITIVE_WRITE } from "./annotations.js";
 
 export function registerCommentWriteTools(
   server: McpServer,
@@ -27,6 +28,7 @@ export function registerCommentWriteTools(
           .default("PlainText")
           .describe("Comment format: PlainText or Wiki markup"),
       },
+      annotations: ADDITIVE_WRITE,
     },
     async ({ itemId, comment, format }) => {
       const result = await client.addComment(itemId, {
