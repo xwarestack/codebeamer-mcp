@@ -8,11 +8,16 @@ import type {
 // Tracker 900 is a template, tracker 901 ("Requirements" in project 2) is derived from it with local changes.
 // Both reference tracker 902 through the custom "Verifies" field.
 
-const statusOptions = [
+const statusOptions = (doneMeaning: string) => [
   { id: 1, name: "New" },
   { id: 2, name: "In Progress" },
-  { id: 3, name: "Done" },
+  { id: 3, name: "Done", meanings: [doneMeaning] },
 ];
+
+const summaryPermission = (access: string) => ({
+  type: "SINGLE",
+  accessPermissions: [{ subjectType: "ROLE", subjectId: 5, access }],
+});
 
 export const configurations: Record<number, CbTrackerConfiguration> = {
   900: {
@@ -27,24 +32,25 @@ export const configurations: Record<number, CbTrackerConfiguration> = {
       defaultLayout: "DOCUMENT",
     },
     fields: [
-      { referenceId: 3, label: "Summary", typeId: 0, mandatory: true, position: 1, permission: { type: "UNRESTRICTED" } },
+      { referenceId: 3, label: "Summary", typeId: 0, mandatory: true, position: 1, permission: summaryPermission("READ_WRITE") },
       {
         referenceId: 7,
         label: "Status",
         typeId: 6,
         mandatory: true,
         position: 2,
-        choiceOptionSetting: { type: "CHOICE_OPTIONS", choiceOptions: statusOptions },
+        choiceOptionSetting: { type: "CHOICE_OPTIONS", choiceOptions: statusOptions("RESOLVED") },
       },
       {
         referenceId: 2,
         label: "Priority",
         typeId: 6,
         position: 3,
+        dependency: { dependentFieldId: 7, valueCombinations: { "1": "1,2" } },
         choiceOptionSetting: {
           type: "CHOICE_OPTIONS",
           choiceOptions: [
-            { id: 1, name: "High" },
+            { id: 1, name: "High", defaultInStatuses: [1] },
             { id: 2, name: "Low", restrictedToStatuses: [1] },
           ],
         },
@@ -89,7 +95,7 @@ export const configurations: Record<number, CbTrackerConfiguration> = {
       defaultLayout: "DOCUMENT",
     },
     fields: [
-      { referenceId: 3, label: "Summary", typeId: 0, mandatory: false, position: 1, permission: { type: "UNRESTRICTED" } },
+      { referenceId: 3, label: "Summary", typeId: 0, mandatory: false, position: 1, permission: summaryPermission("READ") },
       {
         referenceId: 7,
         label: "Status",
@@ -98,7 +104,7 @@ export const configurations: Record<number, CbTrackerConfiguration> = {
         position: 2,
         choiceOptionSetting: {
           type: "CHOICE_OPTIONS",
-          choiceOptions: [...statusOptions, { id: 4, name: "Rejected" }],
+          choiceOptions: [...statusOptions("CLOSED"), { id: 4, name: "Rejected" }],
         },
       },
       {
@@ -106,11 +112,12 @@ export const configurations: Record<number, CbTrackerConfiguration> = {
         label: "Priority",
         typeId: 6,
         position: 3,
+        dependency: { dependentFieldId: 7, valueCombinations: { "1": "1" } },
         choiceOptionSetting: {
           type: "CHOICE_OPTIONS",
           choiceOptions: [
             { id: 1, name: "High" },
-            { id: 2, name: "Low" },
+            { id: 2, name: "Low", defaultInStatuses: [1] },
             { id: 3, name: "Medium" },
           ],
         },

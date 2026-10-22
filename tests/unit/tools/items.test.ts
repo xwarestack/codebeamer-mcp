@@ -58,6 +58,22 @@ describe("list_tracker_items", () => {
   });
 });
 
+describe("list_tracker_items fallback", () => {
+  it("keeps the total of the direct endpoint when the cbQL query is empty", async () => {
+    mockServer.use(
+      http.get(`${BASE}/items/query`, () => HttpResponse.json({ items: [], total: 0 })),
+      http.get(`${BASE}/trackers/:id/items`, () =>
+        HttpResponse.json({ itemRefs: [makeItem()], page: 1, pageSize: 1, total: 30 }),
+      ),
+    );
+
+    const result = await makeClient().listTrackerItems(100, 1, 1);
+    expect(result.items).toHaveLength(1);
+    expect(result.total).toBe(30);
+    expect(result.debug).toContain("total=30");
+  });
+});
+
 describe("get_item", () => {
   it("returns lightweight summary (id, name, tracker, status, description)", async () => {
     const client = makeClient();

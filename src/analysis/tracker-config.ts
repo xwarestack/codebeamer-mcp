@@ -1,6 +1,8 @@
 import type {
   CodebeamerClient,
   CbAccessPermission,
+  CbFieldAccessGrant,
+  CbFieldPermission,
   CbRoleWithPermissions,
   CbTracker,
   CbTrackerBasicInformation,
@@ -55,39 +57,86 @@ export async function loadTrackerSnapshot(
   return { trackerId, config, schema: schema ?? [], tracker, transitions, permissions, warnings };
 }
 
-/** Display names for reference-filter targets, keyed by `${domainType}:${domainId}`. */
-export type ReferenceNames = Map<string, string>;
+/** A reference-filter target (tracker or project) with the project it belongs to. */
+export interface ReferenceTarget {
+  name: string;
+  projectId?: number;
+  projectName?: string;
+}
 
-export async function resolveReferenceNames(
+/** Names needed to make configurations readable and comparable across projects. */
+export interface Lookups {
+  /** Keyed by `${domainType}:${domainId}`. */
+  targets: Map<string, ReferenceTarget>;
+  roles: Map<number, string>;
+}
+
+export function emptyLookups(): Lookups {
+  return { targets: new Map(), roles: new Map() };
+}
+
+function hasRoleGrants(permission: CbFieldPermission | undefined): boolean {
+  const grants = [
+    ...(permission?.accessPermissions ?? []),
+    ...Object.values(permission?.accessPermissionsPerStatusMap ?? {}).flat(),
+  ];
+  return grants.some((g) => g.subjectType === "ROLE");
+}
+
+export async function resolveLookups(
   client: CodebeamerClient,
   snapshots: TrackerSnapshot[],
-): Promise<ReferenceNames> {
-  const names: ReferenceNames = new Map();
+): Promise<Lookups> {
+  const lookups = emptyLookups();
   for (const s of snapshots) {
     const name = s.config.basicInformation?.name ?? s.tracker?.name;
-    if (name) names.set(`TRACKER:${s.trackerId}`, name);
+    if (name) {
+      lookups.targets.set(`TRACKER:${s.trackerId}`, {
+        name,
+        projectId: s.config.basicInformation?.projectId ?? s.tracker?.project?.id,
+        projectName: s.tracker?.project?.name,
+      });
+    }
   }
 
   const wanted = new Map<string, { type: string; id: number }>();
+  let needsRoles = false;
   for (const s of snapshots) {
     for (const field of s.config.fields ?? []) {
+      needsRoles ||= hasRoleGrants(field.permission);
       for (const ref of field.choiceOptionSetting?.referenceFilters ?? []) {
         if (ref.domainId === undefined || !ref.domainType) continue;
         const key = `${ref.domainType}:${ref.domainId}`;
-        if (!names.has(key)) wanted.set(key, { type: ref.domainType, id: ref.domainId });
+        if (!lookups.targets.has(key)) wanted.set(key, { type: ref.domainType, id: ref.domainId });
       }
     }
   }
 
-  await mapLimit([...wanted.entries()], 5, async ([key, { type, id }]) => {
-    try {
-      if (type === "TRACKER") names.set(key, (await client.getTracker(id)).name);
-      else if (type === "PROJECT") names.set(key, (await client.getProject(id)).name);
-    } catch {
-      // Unresolvable targets (deleted or not visible to this user) are shown by ID.
-    }
-  });
-  return names;
+  await Promise.all([
+    mapLimit([...wanted.entries()], 5, async ([key, { type, id }]) => {
+      try {
+        if (type === "TRACKER") {
+          const tracker = await client.getTracker(id);
+          lookups.targets.set(key, {
+            name: tracker.name,
+            projectId: tracker.project?.id,
+            projectName: tracker.project?.name,
+          });
+        } else if (type === "PROJECT") {
+          lookups.targets.set(key, { name: (await client.getProject(id)).name });
+        }
+      } catch {
+        // Unresolvable targets (deleted or not visible to this user) are shown by ID.
+      }
+    }),
+    needsRoles
+      ? client
+          .listRoles()
+          .then((roles) => roles.forEach((r) => lookups.roles.set(r.id, r.name)))
+          .catch(() => undefined)
+      : Promise.resolve(),
+  ]);
+  return lookups;
 }
 
 // --- Normalization ---
@@ -97,14 +146,21 @@ export interface NormalizedOption {
   name: string;
   meanings: string[];
   restrictedToStatuses: string[];
+  defaultInStatuses: string[];
 }
 
 export interface NormalizedReference {
   domainType: string;
   domainId?: number;
   domainName?: string;
+  /** Project of a referenced tracker. */
+  targetProjectName?: string;
+  /** Whether a referenced tracker is in the same project as the referencing tracker; undefined if unknown. */
+  ownProject?: boolean;
   targetIds: number[];
   filterId?: number;
+  filterStatusId?: number;
+  targetPermissions: string[];
 }
 
 export interface NormalizedField {
@@ -121,8 +177,11 @@ export interface NormalizedField {
   hideIf?: string;
   multiple: boolean;
   formula?: string;
+  /** Field access rules with roles, user fields and statuses resolved to names. */
   permission?: string;
   dependsOn?: string;
+  /** Allowed value combinations of the dependency, as `controlling value → allowed values`. */
+  dependencyValues?: string;
   choiceKind?: string;
   options?: NormalizedOption[];
   references?: NormalizedReference[];
@@ -178,11 +237,39 @@ function describeAccess(permission: CbAccessPermission): string {
   return permission.accessLevel ? `${subject} (${permission.accessLevel})` : subject;
 }
 
-export function normalizeTracker(
-  snapshot: TrackerSnapshot,
-  names: ReferenceNames = new Map(),
-): NormalizedTracker {
+function describeFieldPermission(
+  permission: CbFieldPermission | undefined,
+  roleName: (id: number) => string,
+  fieldName: (id: number) => string,
+  statusName: (id: number) => string,
+): string | undefined {
+  if (!permission) return undefined;
+  const grants = (list: CbFieldAccessGrant[]) =>
+    list
+      .map((g) => {
+        const id = g.subjectId ?? -1;
+        const subject = g.subjectType === "ROLE" ? `role ${roleName(id)}` : `field ${fieldName(id)}`;
+        return `${subject}=${g.access ?? "?"}`;
+      })
+      .sort()
+      .join(", ");
+
+  // The discriminator values vary between versions, so the variant is recognized by its data.
+  if (permission.accessPermissionsPerStatusMap) {
+    const perStatus = Object.entries(permission.accessPermissionsPerStatusMap)
+      .map(([status, list]) => `${statusName(Number(status))}: ${grants(list) || "none"}`)
+      .sort()
+      .join("; ");
+    return `per status: ${perStatus || "none"}`;
+  }
+  if (permission.accessPermissions) return `single: ${grants(permission.accessPermissions) || "none"}`;
+  if (permission.sameAsId !== undefined) return `same as ${fieldName(permission.sameAsId)}`;
+  return permission.type?.toLowerCase();
+}
+
+export function normalizeTracker(snapshot: TrackerSnapshot, lookups: Lookups = emptyLookups()): NormalizedTracker {
   const basic = snapshot.config.basicInformation ?? {};
+  const projectId = basic.projectId ?? snapshot.tracker?.project?.id;
   const schemaById = new Map(snapshot.schema.map((f) => [f.id, f]));
   const configFields = [...(snapshot.config.fields ?? [])].sort(
     (a, b) => (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER),
@@ -212,6 +299,8 @@ export function normalizeTracker(
     const id = configFieldId(f);
     if (id !== undefined) fieldNames.set(id, nameOf(f));
   }
+  const fieldName = (id: number) => fieldNames.get(id) ?? `#${id}`;
+  const roleName = (id: number) => lookups.roles.get(id) ?? `#${id}`;
 
   const fields: NormalizedField[] = configFields.map((f) => {
     const id = configFieldId(f);
@@ -219,6 +308,7 @@ export function normalizeTracker(
     const setting = f.choiceOptionSetting;
     const builtIn = id !== undefined && id < FIRST_CUSTOM_FIELD_ID ? (sf?.trackerItemField ?? sf?.legacyRestName) : undefined;
     const dependentId = f.dependency?.dependentFieldId;
+    const combinations = Object.entries(f.dependency?.valueCombinations ?? {});
     return {
       id,
       name: nameOf(f),
@@ -232,22 +322,41 @@ export function normalizeTracker(
       hideIf: f.hideIfFormula || undefined,
       multiple: f.multipleSelection === true,
       formula: f.computedAs || undefined,
-      permission: f.permission?.type,
-      dependsOn: dependentId !== undefined ? (fieldNames.get(dependentId) ?? `#${dependentId}`) : undefined,
+      permission: describeFieldPermission(f.permission, roleName, fieldName, statusName),
+      dependsOn: dependentId !== undefined ? fieldName(dependentId) : undefined,
+      dependencyValues:
+        combinations.length > 0
+          ? combinations
+              .map(([value, allowed]) => `${value} → ${allowed}`)
+              .sort()
+              .join("; ")
+          : undefined,
       choiceKind: setting?.type,
       options: setting?.choiceOptions?.map((o) => ({
         id: o.id,
         name: o.name,
         meanings: o.meanings ?? [],
         restrictedToStatuses: (o.restrictedToStatuses ?? []).map(statusName),
+        defaultInStatuses: (o.defaultInStatuses ?? []).map(statusName),
       })),
-      references: setting?.referenceFilters?.map((r) => ({
-        domainType: r.domainType ?? "?",
-        domainId: r.domainId,
-        domainName: names.get(`${r.domainType}:${r.domainId}`),
-        targetIds: r.targetIds ?? [],
-        filterId: r.filterId,
-      })),
+      references: setting?.referenceFilters?.map((r) => {
+        const target = lookups.targets.get(`${r.domainType}:${r.domainId}`);
+        const ownProject =
+          r.domainType === "TRACKER" && target?.projectId !== undefined && projectId !== undefined
+            ? target.projectId === projectId
+            : undefined;
+        return {
+          domainType: r.domainType ?? "?",
+          domainId: r.domainId,
+          domainName: target?.name,
+          targetProjectName: target?.projectName,
+          ownProject,
+          targetIds: r.targetIds ?? [],
+          filterId: r.filterId,
+          filterStatusId: r.filterStatusId,
+          targetPermissions: [...(r.targetPermissions ?? [])].sort(),
+        };
+      }),
     };
   });
 
@@ -269,7 +378,7 @@ export function normalizeTracker(
     id: snapshot.trackerId,
     name: basic.name ?? snapshot.tracker?.name ?? `Tracker ${snapshot.trackerId}`,
     key: basic.key ?? snapshot.tracker?.keyName,
-    projectId: basic.projectId ?? snapshot.tracker?.project?.id,
+    projectId,
     projectName: snapshot.tracker?.project?.name,
     typeName: snapshot.tracker?.type?.name,
     template: basic.template === true,
@@ -284,21 +393,36 @@ export function normalizeTracker(
   };
 }
 
+function referenceConstraints(ref: NormalizedReference): string[] {
+  return [
+    ref.targetIds.length > 0 ? `targets ${[...ref.targetIds].sort((a, b) => a - b).join(",")}` : "",
+    ref.filterId ? `filter ${ref.filterId}` : "",
+    ref.filterStatusId ? `filter status ${ref.filterStatusId}` : "",
+    ref.targetPermissions.length > 0 ? `permissions ${ref.targetPermissions.join(",")}` : "",
+  ].filter(Boolean);
+}
+
+function referenceLocation(ref: NormalizedReference): string {
+  if (ref.ownProject === true) return " (own project)";
+  if (ref.ownProject === false) return ` (project ${ref.targetProjectName ?? "?"})`;
+  return "";
+}
+
 export function describeReference(ref: NormalizedReference): string {
   const kind = ref.domainType === "TRACKER" ? "tracker" : ref.domainType === "PROJECT" ? "project" : ref.domainType;
   const target = ref.domainName ? `"${ref.domainName}" [${ref.domainId}]` : `[${ref.domainId ?? "?"}]`;
-  const extras = [
-    ref.targetIds.length > 0 ? `targets ${ref.targetIds.join(",")}` : "",
-    ref.filterId ? `filter ${ref.filterId}` : "",
-  ].filter(Boolean);
-  return `${kind} ${target}${extras.length > 0 ? ` (${extras.join(", ")})` : ""}`;
+  const location = ref.ownProject === false ? ` in project ${ref.targetProjectName ?? "?"}` : "";
+  const constraints = referenceConstraints(ref);
+  return `${kind} ${target}${location}${constraints.length > 0 ? ` (${constraints.join(", ")})` : ""}`;
 }
 
-// Comparable across projects: uses the target's name when known, since IDs differ between projects.
+// Comparable across projects: a referenced tracker is identified by name plus whether it lives in the
+// referencing tracker's own project, so a copied project that still points at the original project's
+// tracker shows up as a difference.
 function referenceKey(ref: NormalizedReference): string {
   const target = ref.domainName ?? `#${ref.domainId}`;
-  const targets = ref.targetIds.length > 0 ? ` targets ${[...ref.targetIds].sort((a, b) => a - b).join(",")}` : "";
-  return `${ref.domainType.toLowerCase()} ${target}${targets}`;
+  const constraints = referenceConstraints(ref);
+  return `${ref.domainType.toLowerCase()} ${target}${referenceLocation(ref)}${constraints.length > 0 ? ` (${constraints.join(", ")})` : ""}`;
 }
 
 // --- Reference graph ---
@@ -395,8 +519,15 @@ const FIELD_PROPERTIES: Array<[string, (f: NormalizedField) => string]> = [
   ["computed as", (f) => show(f.formula)],
   ["permission", (f) => show(f.permission)],
   ["depends on", (f) => show(f.dependsOn)],
+  ["dependency values", (f) => show(f.dependencyValues)],
   ["choice kind", (f) => show(f.choiceKind)],
   ["references", (f) => list((f.references ?? []).map(referenceKey))],
+];
+
+const OPTION_PROPERTIES: Array<[string, (o: NormalizedOption) => string]> = [
+  ["restricted to statuses", (o) => list(o.restrictedToStatuses)],
+  ["default in statuses", (o) => list(o.defaultInStatuses)],
+  ["meanings", (o) => list(o.meanings)],
 ];
 
 function compareFields(a: NormalizedField, b: NormalizedField): ValueChange[] {
@@ -407,51 +538,85 @@ function compareFields(a: NormalizedField, b: NormalizedField): ValueChange[] {
     if (va !== vb) changes.push({ property, a: va, b: vb });
   }
 
-  // Status options are reported in the statuses section instead.
-  if (!a.isStatus && (a.options || b.options)) {
+  if (a.options || b.options) {
     const optsA = new Map((a.options ?? []).map((o) => [o.name.toLowerCase(), o]));
     const optsB = new Map((b.options ?? []).map((o) => [o.name.toLowerCase(), o]));
-    const onlyA = [...optsA.values()].filter((o) => !optsB.has(o.name.toLowerCase())).map((o) => o.name);
-    const onlyB = [...optsB.values()].filter((o) => !optsA.has(o.name.toLowerCase())).map((o) => o.name);
-    if (onlyA.length > 0 || onlyB.length > 0) {
-      changes.push({ property: "options (only on this side)", a: list(onlyA), b: list(onlyB) });
+    // Added and removed statuses are reported in the statuses section; their metadata is compared here.
+    if (!a.isStatus) {
+      const onlyA = [...optsA.values()].filter((o) => !optsB.has(o.name.toLowerCase())).map((o) => o.name);
+      const onlyB = [...optsB.values()].filter((o) => !optsA.has(o.name.toLowerCase())).map((o) => o.name);
+      if (onlyA.length > 0 || onlyB.length > 0) {
+        changes.push({ property: "options (only on this side)", a: list(onlyA), b: list(onlyB) });
+      }
     }
     for (const [key, oa] of optsA) {
       const ob = optsB.get(key);
       if (!ob) continue;
-      if (list(oa.restrictedToStatuses) !== list(ob.restrictedToStatuses)) {
-        changes.push({
-          property: `option "${oa.name}" restricted to statuses`,
-          a: list(oa.restrictedToStatuses),
-          b: list(ob.restrictedToStatuses),
-        });
-      }
-      if (list(oa.meanings) !== list(ob.meanings)) {
-        changes.push({ property: `option "${oa.name}" meanings`, a: list(oa.meanings), b: list(ob.meanings) });
+      for (const [property, get] of OPTION_PROPERTIES) {
+        if (get(oa) !== get(ob)) {
+          changes.push({ property: `option "${oa.name}" ${property}`, a: get(oa), b: get(ob) });
+        }
       }
     }
   }
   return changes;
 }
 
-function transitionKeys(transitions: NormalizedTransition[]): Map<string, NormalizedTransition> {
-  const counts = new Map<string, number>();
-  for (const t of transitions) {
-    const base = `${t.from} → ${t.to}`.toLowerCase();
-    counts.set(base, (counts.get(base) ?? 0) + 1);
-  }
-  const keyed = new Map<string, NormalizedTransition>();
-  for (const t of transitions) {
-    const base = `${t.from} → ${t.to}`;
-    // Several transitions between the same statuses are told apart by name.
-    const key = (counts.get(base.toLowerCase()) ?? 0) > 1 ? `${base} "${t.name}"` : base;
-    keyed.set(key.toLowerCase(), t);
-  }
-  return keyed;
-}
-
 function describeTransition(t: NormalizedTransition): string {
   return `${t.from} → ${t.to}${t.name ? ` ("${t.name}")` : ""}`;
+}
+
+function compareTransitions(
+  a: NormalizedTransition[],
+  b: NormalizedTransition[],
+): Pick<TrackerDiff, "transitionsOnlyInA" | "transitionsOnlyInB" | "transitionChanges"> {
+  const endpoints = (t: NormalizedTransition) => `${t.from} → ${t.to}`.toLowerCase();
+  const groups = new Map<string, { a: NormalizedTransition[]; b: NormalizedTransition[] }>();
+  for (const t of a) {
+    const g = groups.get(endpoints(t)) ?? { a: [], b: [] };
+    g.a.push(t);
+    groups.set(endpoints(t), g);
+  }
+  for (const t of b) {
+    const g = groups.get(endpoints(t)) ?? { a: [], b: [] };
+    g.b.push(t);
+    groups.set(endpoints(t), g);
+  }
+
+  const result: Pick<TrackerDiff, "transitionsOnlyInA" | "transitionsOnlyInB" | "transitionChanges"> = {
+    transitionsOnlyInA: [],
+    transitionsOnlyInB: [],
+    transitionChanges: [],
+  };
+  for (const group of groups.values()) {
+    // Pair transitions between the same statuses by name first; a single leftover on each side is a rename.
+    const pairs: Array<[NormalizedTransition, NormalizedTransition]> = [];
+    const restB = [...group.b];
+    const restA: NormalizedTransition[] = [];
+    for (const ta of group.a) {
+      const index = restB.findIndex((tb) => tb.name.toLowerCase() === ta.name.toLowerCase());
+      if (index >= 0) pairs.push([ta, restB.splice(index, 1)[0]]);
+      else restA.push(ta);
+    }
+    if (restA.length === 1 && restB.length === 1) {
+      pairs.push([restA[0], restB[0]]);
+      restA.length = 0;
+      restB.length = 0;
+    }
+    result.transitionsOnlyInA.push(...restA.map(describeTransition));
+    result.transitionsOnlyInB.push(...restB.map(describeTransition));
+
+    for (const [ta, tb] of pairs) {
+      const changes: ValueChange[] = [];
+      if (ta.name !== tb.name) changes.push({ property: "name", a: show(ta.name), b: show(tb.name) });
+      if (ta.hidden !== tb.hidden) changes.push({ property: "hidden", a: show(ta.hidden), b: show(tb.hidden) });
+      if (list(ta.allowed) !== list(tb.allowed)) {
+        changes.push({ property: "allowed for", a: list(ta.allowed), b: list(tb.allowed) });
+      }
+      if (changes.length > 0) result.transitionChanges.push({ transition: describeTransition(ta), changes });
+    }
+  }
+  return result;
 }
 
 export function compareTrackers(a: NormalizedTracker, b: NormalizedTracker): TrackerDiff {
@@ -486,21 +651,11 @@ export function compareTrackers(a: NormalizedTracker, b: NormalizedTracker): Tra
   const statusNamesA = new Set(a.statuses.map((s) => s.name.toLowerCase()));
   const statusNamesB = new Set(b.statuses.map((s) => s.name.toLowerCase()));
 
+  // A workflow that could not be loaded is unknown, not empty: compare only when both are available.
   const transitionsCompared = a.transitions !== undefined && b.transitions !== undefined;
-  const transA = transitionKeys(a.transitions ?? []);
-  const transB = transitionKeys(b.transitions ?? []);
-  const transitionChanges: TrackerDiff["transitionChanges"] = [];
-  for (const [key, ta] of transA) {
-    const tb = transB.get(key);
-    if (!tb) continue;
-    const changes: ValueChange[] = [];
-    if (ta.name !== tb.name) changes.push({ property: "name", a: show(ta.name), b: show(tb.name) });
-    if (ta.hidden !== tb.hidden) changes.push({ property: "hidden", a: show(ta.hidden), b: show(tb.hidden) });
-    if (list(ta.allowed) !== list(tb.allowed)) {
-      changes.push({ property: "allowed for", a: list(ta.allowed), b: list(tb.allowed) });
-    }
-    if (changes.length > 0) transitionChanges.push({ transition: `${ta.from} → ${ta.to}`, changes });
-  }
+  const transitions = transitionsCompared
+    ? compareTransitions(a.transitions!, b.transitions!)
+    : { transitionsOnlyInA: [], transitionsOnlyInB: [], transitionChanges: [] };
 
   let permissions: TrackerDiff["permissions"];
   if (a.permissions && b.permissions) {
@@ -533,9 +688,7 @@ export function compareTrackers(a: NormalizedTracker, b: NormalizedTracker): Tra
     fieldChanges,
     statusesOnlyInA: a.statuses.filter((s) => !statusNamesB.has(s.name.toLowerCase())).map((s) => s.name),
     statusesOnlyInB: b.statuses.filter((s) => !statusNamesA.has(s.name.toLowerCase())).map((s) => s.name),
-    transitionsOnlyInA: [...transA.entries()].filter(([k]) => !transB.has(k)).map(([, t]) => describeTransition(t)),
-    transitionsOnlyInB: [...transB.entries()].filter(([k]) => !transA.has(k)).map(([, t]) => describeTransition(t)),
-    transitionChanges,
+    ...transitions,
     permissions,
     transitionsCompared,
   };

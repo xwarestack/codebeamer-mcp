@@ -9,7 +9,7 @@ import {
   loadTrackerSnapshot,
   matchTrackersByName,
   normalizeTracker,
-  resolveReferenceNames,
+  resolveLookups,
   type NormalizedTracker,
   type TrackerDiff,
 } from "../analysis/tracker-config.js";
@@ -30,7 +30,7 @@ async function loadNormalized(
   options: LoadOptions,
 ): Promise<NormalizedTracker[]> {
   const snapshots = await mapLimit(trackerIds, 4, (id) => loadTrackerSnapshot(client, id, options));
-  const names = await resolveReferenceNames(client, snapshots);
+  const names = await resolveLookups(client, snapshots);
   return snapshots.map((s) => normalizeTracker(s, names));
 }
 
@@ -237,6 +237,6 @@ async function loadNormalizedPairs(
     }
   });
   const loaded = snapshots.filter((s): s is NonNullable<typeof s> => s !== undefined);
-  const names = await resolveReferenceNames(client, loaded.flat());
+  const names = await resolveLookups(client, loaded.flat());
   return loaded.map(([a, b]) => [normalizeTracker(a, names), normalizeTracker(b, names)]);
 }

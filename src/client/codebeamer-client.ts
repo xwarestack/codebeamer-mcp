@@ -226,6 +226,20 @@ export interface CbReferenceFilter {
   targetPermissions?: string[];
 }
 
+export interface CbFieldAccessGrant {
+  access?: string;
+  subjectId?: number;
+  subjectType?: string;
+}
+
+// Discriminated by `type` (UNRESTRICTED, SINGLE, PER_STATUS, SAME_AS); each variant has one of these properties.
+export interface CbFieldPermission {
+  type?: string;
+  accessPermissions?: CbFieldAccessGrant[];
+  accessPermissionsPerStatusMap?: Record<string, CbFieldAccessGrant[]>;
+  sameAsId?: number;
+}
+
 // Discriminated by `type` in the spec (CHOICE_OPTIONS, CHOICE_TRACKERS, CHOICE_USERS, ...);
 // consumers check the shape instead, since the discriminator values vary between versions.
 export interface CbChoiceOptionSetting {
@@ -248,8 +262,8 @@ export interface CbTrackerFieldConfig {
   mandatoryIfFormula?: string;
   mandatoryExceptInStatus?: number[];
   choiceOptionSetting?: CbChoiceOptionSetting;
-  permission?: { type?: string; [key: string]: unknown };
-  dependency?: { dependentFieldId?: number; valueCombinations?: unknown };
+  permission?: CbFieldPermission;
+  dependency?: { dependentFieldId?: number; valueCombinations?: Record<string, string> };
   position?: number;
   [key: string]: unknown;
 }
@@ -393,13 +407,13 @@ export class CodebeamerClient {
     const directObj = rawDirect as Record<string, unknown> | null;
     const queryTotal = rawObj?.["total"] ?? "?";
     const directTotal = directObj?.["total"] ?? "?";
-    const directItems = toArray<CbItem>(rawDirect);
+    const direct = toPage<CbItem>(rawDirect);
     const debug =
       `API returned total=${queryTotal} for the cbQL query and total=${directTotal} for the direct endpoint.\n` +
       `total=0 means Codebeamer reports no items (wrong tracker ID, missing permission, or an empty tracker).\n` +
       `query: ${JSON.stringify(raw).slice(0, 300)}\n` +
       `direct: ${JSON.stringify(rawDirect).slice(0, 300)}`;
-    return { items: directItems, debug };
+    return { ...direct, debug };
   }
 
   async searchItems(

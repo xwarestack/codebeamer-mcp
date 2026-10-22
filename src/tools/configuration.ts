@@ -5,7 +5,7 @@ import {
   buildReferenceEdges,
   loadTrackerSnapshot,
   normalizeTracker,
-  resolveReferenceNames,
+  resolveLookups,
   type TrackerSnapshot,
 } from "../analysis/tracker-config.js";
 import { mapLimit } from "../analysis/concurrency.js";
@@ -42,7 +42,7 @@ export function registerConfigurationTools(
     },
     async ({ trackerId, includeOptions, format }) => {
       const snapshot = await loadTrackerSnapshot(client, trackerId, { transitions: false });
-      const names = await resolveReferenceNames(client, [snapshot]);
+      const names = await resolveLookups(client, [snapshot]);
       const tracker = normalizeTracker(snapshot, names);
       const text =
         format === "json" ? JSON.stringify(tracker) : formatTrackerConfiguration(tracker, { includeOptions });
@@ -181,7 +181,7 @@ export function registerConfigurationTools(
         })
       ).filter((s): s is TrackerSnapshot => s !== undefined);
 
-      const names = await resolveReferenceNames(client, snapshots);
+      const names = await resolveLookups(client, snapshots);
       const normalized = snapshots.map((s) => normalizeTracker(s, names));
       warnings.push(...normalized.flatMap((t) => t.warnings));
       const text = formatTrackerGraph(

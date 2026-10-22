@@ -27,7 +27,9 @@ function fieldNotes(f: NormalizedField): string {
   if (f.mandatoryIf) notes.push(`mandatory if: \`${f.mandatoryIf}\``);
   if (f.mandatoryExceptIn.length > 0) notes.push(`not mandatory in: ${f.mandatoryExceptIn.join(", ")}`);
   if (f.hideIf) notes.push(`hidden if: \`${f.hideIf}\``);
-  if (f.dependsOn) notes.push(`depends on: ${f.dependsOn}`);
+  if (f.dependsOn) {
+    notes.push(`depends on: ${f.dependsOn}${f.dependencyValues ? ` (${f.dependencyValues})` : ""}`);
+  }
   if (f.options && !f.isStatus) notes.push(`${f.options.length} options`);
   if (f.references && f.references.length > 0) notes.push(`refs: ${f.references.map(describeReference).join("; ")}`);
   return notes.join("; ");
@@ -71,7 +73,8 @@ export function formatTrackerConfiguration(
   lines.push("", `### Statuses (${t.statuses.length})`, "", t.statuses.map((s) => `${s.name} [${s.id}]`).join(", ") || "_none_");
 
   if (options.includeOptions) {
-    const choiceFields = t.fields.filter((f) => f.options && f.options.length > 0 && !f.isStatus);
+    // Statuses are listed here too, since their meanings and restrictions matter for the workflow.
+    const choiceFields = t.fields.filter((f) => f.options && f.options.length > 0);
     if (choiceFields.length > 0) {
       lines.push("", "### Choice options");
       for (const f of choiceFields) {
@@ -80,6 +83,7 @@ export function formatTrackerConfiguration(
           const extras = [
             o.meanings.length > 0 ? `meanings: ${o.meanings.join(", ")}` : "",
             o.restrictedToStatuses.length > 0 ? `only in: ${o.restrictedToStatuses.join(", ")}` : "",
+            o.defaultInStatuses.length > 0 ? `default in: ${o.defaultInStatuses.join(", ")}` : "",
           ].filter(Boolean);
           lines.push(`- [${o.id}] ${o.name}${extras.length > 0 ? ` (${extras.join("; ")})` : ""}`);
         }

@@ -62,6 +62,9 @@ describe("classifyAccess", () => {
     expect(classifyAccess("delete", "/v3/associations/{associationId}", "Association")).toBe("write");
     expect(classifyAccess("post", "/v3/tracker/configuration", "Tracker")).toBe("admin");
     expect(classifyAccess("put", "/v3/trackers/{trackerId}/roles/{roleId}/permissions", "Tracker permission")).toBe("admin");
+    // Permission changes stay admin-only even under a content tag.
+    expect(classifyAccess("put", "/v3/wikipages/{wikiId}/permissions", "Wiki")).toBe("admin");
+    expect(classifyAccess("get", "/v3/wikipages/{wikiId}/permissions", "Wiki")).toBe("read");
     expect(classifyAccess("post", "/v3/deployment", "Deployment")).toBe("admin");
   });
 

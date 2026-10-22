@@ -65,6 +65,8 @@ const CONTENT_TAGS = new Set([
 export function classifyAccess(method: string, path: string, tag: string): AccessMode {
   if (method === "get") return "read";
   if (method === "post" && READ_ONLY_POSTS.some((re) => re.test(path))) return "read";
+  // Permission changes are admin-only even under a content tag (e.g. PUT /wikipages/{id}/permissions).
+  if (/permission/i.test(path)) return "admin";
   return CONTENT_TAGS.has(tag.trim().toLowerCase()) ? "write" : "admin";
 }
 
