@@ -3,6 +3,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CodebeamerClient } from "../client/codebeamer-client.js";
 import {
   buildReferenceEdges,
+  expandTypeReferences,
+  typeReferenceProjects,
+  type ProjectTrackers,
   loadTrackerSnapshot,
   normalizeTracker,
   resolveLookups,
@@ -63,7 +66,8 @@ export function registerConfigurationTools(
     },
     async ({ trackerId }) => {
       const snapshot = await loadTrackerSnapshot(client, trackerId, { transitions: true });
-      return { content: [{ type: "text", text: formatWorkflow(normalizeTracker(snapshot)) }] };
+      const lookups = await resolveLookups(client, [snapshot]);
+      return { content: [{ type: "text", text: formatWorkflow(normalizeTracker(snapshot, lookups)) }] };
     },
   );
 
@@ -181,13 +185,29 @@ export function registerConfigurationTools(
         })
       ).filter((s): s is TrackerSnapshot => s !== undefined);
 
-      const names = await resolveLookups(client, snapshots);
-      const normalized = snapshots.map((s) => normalizeTracker(s, names));
+      const lookups = await resolveLookups(client, snapshots);
+      const normalized = snapshots.map((s) => normalizeTracker(s, lookups));
       warnings.push(...normalized.flatMap((t) => t.warnings));
+
+      // Type references ("trackers of type X in project P") are resolved against P's trackers.
+      const edges = buildReferenceEdges(normalized);
+      const projectTrackers: ProjectTrackers = new Map([[projectId, trackers]]);
+      await mapLimit(
+        typeReferenceProjects(edges).filter((id) => !projectTrackers.has(id)),
+        3,
+        async (id) => {
+          try {
+            projectTrackers.set(id, await client.listTrackers(id));
+          } catch (err) {
+            warnings.push(`Trackers of project ${id}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        },
+      );
+
       const text = formatTrackerGraph(
         `Tracker reference graph of project ${projectId}`,
         normalized,
-        buildReferenceEdges(normalized),
+        expandTypeReferences(edges, projectTrackers),
         warnings,
       );
       return { content: [{ type: "text", text }] };

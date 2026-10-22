@@ -183,7 +183,7 @@ export function formatTrackerGraph(
   edges: TrackerEdge[],
   warnings: string[],
 ): string {
-  const lines = [`## ${title}`, "", `${trackers.length} trackers, ${edges.length} reference fields pointing to other trackers or projects.`];
+  const lines = [`## ${title}`, "", `${trackers.length} trackers, ${edges.length} references to tracker items.`];
 
   if (edges.length > 0) {
     lines.push(
@@ -201,15 +201,28 @@ export function formatTrackerGraph(
       return nodeIds.get(key)!.split("[")[0];
     };
     for (const t of trackers) node(`TRACKER:${t.id}`, t.name);
-    const arrows = edges.map((e) => {
+    // One arrow per tracker pair, labelled with every field that links them, keeps large projects readable.
+    const arrows = new Map<string, { from: string; to: string; fields: Set<string> }>();
+    for (const e of edges) {
       const ref = e.reference;
-      const target = node(
+      const label = ref.domainName ?? `${ref.domainType.toLowerCase()} ${ref.domainId ?? "?"}`;
+      const to = node(
         `${ref.domainType}:${ref.domainId}`,
-        ref.domainName ?? `${ref.domainType.toLowerCase()} ${ref.domainId ?? "?"}`,
+        ref.ownProject === false && ref.targetProjectName ? `${label} (${ref.targetProjectName})` : label,
       );
-      return `  ${node(`TRACKER:${e.fromId}`, e.fromName)} -->|"${mermaidLabel(e.field)}"| ${target}`;
-    });
-    lines.push("", "```mermaid", "flowchart LR", ...[...nodeIds.values()].map((n) => `  ${n}`), ...arrows, "```");
+      const from = node(`TRACKER:${e.fromId}`, e.fromName);
+      const arrow = arrows.get(`${from}>${to}`) ?? { from, to, fields: new Set<string>() };
+      arrow.fields.add(e.field);
+      arrows.set(`${from}>${to}`, arrow);
+    }
+    lines.push(
+      "",
+      "```mermaid",
+      "flowchart LR",
+      ...[...nodeIds.values()].map((n) => `  ${n}`),
+      ...[...arrows.values()].map((a) => `  ${a.from} -->|"${mermaidLabel([...a.fields].join(", "))}"| ${a.to}`),
+      "```",
+    );
   }
 
   const isolated = trackers.filter(

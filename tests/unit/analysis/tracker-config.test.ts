@@ -52,7 +52,7 @@ describe("normalizeTracker", () => {
     expect(priority.dependencyValues).toBe("1 → 1,2");
 
     // Role IDs in field permissions are resolved through /roles.
-    expect(t.fields.find((f) => f.name === "Summary")!.permission).toBe("single: role Developer=READ_WRITE");
+    expect(t.fields.find((f) => f.name === "Summary")!.permission).toBe("single (READ_WRITE: role Developer)");
 
     const verifies = t.fields.find((f) => f.name === "Verifies")!;
     expect(verifies.builtIn).toBeUndefined();
@@ -104,8 +104,8 @@ describe("compareTrackers (template 900 vs derived 901)", () => {
     expect(summary.changes).toContainEqual({ property: "mandatory", a: "yes", b: "no" });
     expect(summary.changes).toContainEqual({
       property: "permission",
-      a: "single: role Developer=READ_WRITE",
-      b: "single: role Developer=READ",
+      a: "single (READ_WRITE: role Developer)",
+      b: "single (READ: role Developer)",
     });
 
     const priority = diff.fieldChanges.find((c) => c.field === "Priority")!;

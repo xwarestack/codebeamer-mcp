@@ -69,10 +69,11 @@ export interface Lookups {
   /** Keyed by `${domainType}:${domainId}`. */
   targets: Map<string, ReferenceTarget>;
   roles: Map<number, string>;
+  trackerTypes: Map<number, string>;
 }
 
 export function emptyLookups(): Lookups {
-  return { targets: new Map(), roles: new Map() };
+  return { targets: new Map(), roles: new Map(), trackerTypes: new Map() };
 }
 
 function hasRoleGrants(permission: CbFieldPermission | undefined): boolean {
@@ -101,10 +102,17 @@ export async function resolveLookups(
 
   const wanted = new Map<string, { type: string; id: number }>();
   let needsRoles = false;
+  let needsTrackerTypes = false;
   for (const s of snapshots) {
+    needsRoles ||= (s.transitions ?? []).some((t) => (t.permissions ?? []).some((p) => p.role && !p.role.name));
     for (const field of s.config.fields ?? []) {
       needsRoles ||= hasRoleGrants(field.permission);
       for (const ref of field.choiceOptionSetting?.referenceFilters ?? []) {
+        // PROJECT targets are tracker types (item fields) or roles (user/member fields).
+        if (ref.domainType === "PROJECT" && (ref.targetIds?.length ?? 0) > 0) {
+          needsTrackerTypes = true;
+          needsRoles = true;
+        }
         if (ref.domainId === undefined || !ref.domainType) continue;
         const key = `${ref.domainType}:${ref.domainId}`;
         if (!lookups.targets.has(key)) wanted.set(key, { type: ref.domainType, id: ref.domainId });
@@ -135,6 +143,12 @@ export async function resolveLookups(
           .then((roles) => roles.forEach((r) => lookups.roles.set(r.id, r.name)))
           .catch(() => undefined)
       : Promise.resolve(),
+    needsTrackerTypes
+      ? client
+          .listTrackerTypes()
+          .then((types) => types.forEach((t) => lookups.trackerTypes.set(t.id, t.name)))
+          .catch(() => undefined)
+      : Promise.resolve(),
   ]);
   return lookups;
 }
@@ -149,15 +163,26 @@ export interface NormalizedOption {
   defaultInStatuses: string[];
 }
 
+/**
+ * One reference-filter of a reference field. Codebeamer uses two forms:
+ * - TRACKER: items of the tracker `domainId`;
+ * - PROJECT: for item references, items of every tracker in project `domainId` whose tracker type is in
+ *   `targetIds`; for user/member fields, members of project `domainId` with a role in `targetIds`.
+ */
 export interface NormalizedReference {
+  /** What the field selects: tracker items, project members (users/groups), or projects. */
+  kind: "items" | "members" | "projects";
   domainType: string;
   domainId?: number;
   domainName?: string;
   /** Project of a referenced tracker. */
   targetProjectName?: string;
-  /** Whether a referenced tracker is in the same project as the referencing tracker; undefined if unknown. */
+  /** Whether the target tracker or project is the referencing tracker's own project; undefined if unknown. */
   ownProject?: boolean;
+  /** Tracker type IDs (item references) or role IDs (member references) for PROJECT references. */
   targetIds: number[];
+  /** Names of `targetIds`: tracker type names or role names. */
+  targetTypeNames: string[];
   filterId?: number;
   filterStatusId?: number;
   targetPermissions: string[];
@@ -216,6 +241,10 @@ export interface NormalizedTracker {
 
 // Codebeamer numbers custom fields from 10000 in every tracker; lower IDs are built-in fields.
 const FIRST_CUSTOM_FIELD_ID = 10000;
+// Table fields take IDs n * 1000000 and their columns n * 1000000 + 1, + 2, ...
+const TABLE_ID_STEP = 1000000;
+
+const ACCESS_ORDER = ["READ_WRITE", "READ", "NONE"];
 
 function configFieldId(field: CbTrackerFieldConfig): number | undefined {
   if (typeof field.referenceId === "number") return field.referenceId;
@@ -226,15 +255,34 @@ function isStatusSchemaField(field: CbTrackerSchemaField): boolean {
   return field.trackerItemField === "status" || field.legacyRestName === "status";
 }
 
-function describeAccess(permission: CbAccessPermission): string {
+// Transition permissions often carry only the ID of the role or field, so names are resolved here.
+function describeAccess(
+  permission: CbAccessPermission,
+  roleName: (id: number) => string,
+  fieldName: (id: number) => string,
+): string {
   const subject = permission.role
-    ? `role ${permission.role.name}`
+    ? `role ${permission.role.name ?? roleName(permission.role.id)}`
     : permission.field
-      ? `field ${permission.field.name}`
+      ? `field ${permission.field.name ?? fieldName(permission.field.id)}`
       : permission.project
-        ? `project ${permission.project.name}`
+        ? `project ${permission.project.name ?? `#${permission.project.id}`}`
         : "?";
   return permission.accessLevel ? `${subject} (${permission.accessLevel})` : subject;
+}
+
+// The choice setting type (CHOICE_USERS, MEMBERS, CHOICE_PROJECTS, ...) or, if missing, the field's schema
+// type tells what a reference field selects.
+function referenceKind(settingType: string | undefined, fieldType: string | undefined): NormalizedReference["kind"] {
+  const hint = `${settingType ?? ""} ${fieldType ?? ""}`;
+  if (/USER|MEMBER/i.test(hint)) return "members";
+  if (/PROJECT/i.test(hint)) return "projects";
+  return "items";
+}
+
+// Codebeamer models "new item" as the pseudo status "Unset" (ID 0) in transitions.
+function isInitialStatus(status: { id: number; name?: string } | undefined): boolean {
+  return !status || status.id === 0 || /^unset$/i.test(status.name ?? "");
 }
 
 function describeFieldPermission(
@@ -244,25 +292,35 @@ function describeFieldPermission(
   statusName: (id: number) => string,
 ): string | undefined {
   if (!permission) return undefined;
-  const grants = (list: CbFieldAccessGrant[]) =>
-    list
-      .map((g) => {
-        const id = g.subjectId ?? -1;
-        const subject = g.subjectType === "ROLE" ? `role ${roleName(id)}` : `field ${fieldName(id)}`;
-        return `${subject}=${g.access ?? "?"}`;
-      })
-      .sort()
-      .join(", ");
+  // Grouped by access level, e.g. "READ_WRITE: field Assigned to, role Tester; READ: role Developer".
+  const grants = (list: CbFieldAccessGrant[]) => {
+    const byAccess = new Map<string, string[]>();
+    for (const g of list) {
+      const id = g.subjectId ?? -1;
+      const subject = g.subjectType === "ROLE" ? `role ${roleName(id)}` : `field ${fieldName(id)}`;
+      const access = g.access ?? "?";
+      byAccess.set(access, [...(byAccess.get(access) ?? []), subject]);
+    }
+    if (byAccess.size === 0) return "none";
+    return [...byAccess.entries()]
+      .sort(([a], [b]) => ACCESS_ORDER.indexOf(a) - ACCESS_ORDER.indexOf(b) || a.localeCompare(b))
+      .map(([access, subjects]) => `${access}: ${subjects.sort().join(", ")}`)
+      .join("; ");
+  };
 
   // The discriminator values vary between versions, so the variant is recognized by its data.
   if (permission.accessPermissionsPerStatusMap) {
     const perStatus = Object.entries(permission.accessPermissionsPerStatusMap)
-      .map(([status, list]) => `${statusName(Number(status))}: ${grants(list) || "none"}`)
+      .map(([status, list]) => {
+        // The non-numeric key holds the rules for items without a status yet (while being created).
+        const id = Number(status);
+        return `${Number.isFinite(id) ? statusName(id) : "(no status)"} (${grants(list)})`;
+      })
       .sort()
-      .join("; ");
+      .join(" | ");
     return `per status: ${perStatus || "none"}`;
   }
-  if (permission.accessPermissions) return `single: ${grants(permission.accessPermissions) || "none"}`;
+  if (permission.accessPermissions) return `single (${grants(permission.accessPermissions)})`;
   if (permission.sameAsId !== undefined) return `same as ${fieldName(permission.sameAsId)}`;
   return permission.type?.toLowerCase();
 }
@@ -279,10 +337,30 @@ export function normalizeTracker(snapshot: TrackerSnapshot, lookups: Lookups = e
     const id = configFieldId(f);
     return id === undefined ? undefined : schemaById.get(id);
   };
+  // Labels may contain HTML markup (e.g. <font color="green">Team</font>), which would break tables,
+  // diagrams and name matching.
+  const ownName = (f: CbTrackerFieldConfig) => {
+    const id = configFieldId(f);
+    const raw = schemaFor(f)?.name ?? f.label ?? f.title ?? `#${id ?? "?"}`;
+    return raw.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim() || `#${id ?? "?"}`;
+  };
+  const tableNames = new Map<number, string>();
+  for (const f of configFields) {
+    const id = configFieldId(f);
+    if (id !== undefined && id >= TABLE_ID_STEP && id % TABLE_ID_STEP === 0) tableNames.set(id, ownName(f));
+  }
+  // Table columns are named "Table › Column" so they stay recognizable and comparable.
   const nameOf = (f: CbTrackerFieldConfig) => {
     const id = configFieldId(f);
-    return schemaFor(f)?.name ?? f.label ?? f.title ?? `#${id ?? "?"}`;
+    const table = id !== undefined && id % TABLE_ID_STEP !== 0 ? tableNames.get(id - (id % TABLE_ID_STEP)) : undefined;
+    return table ? `${table} › ${ownName(f)}` : ownName(f);
   };
+  // Table columns are missing from the schema; name their numeric typeId after fields of the same typeId.
+  const typeNames = new Map<number, string>();
+  for (const f of configFields) {
+    const type = schemaFor(f)?.type;
+    if (type && f.typeId !== undefined && !typeNames.has(f.typeId)) typeNames.set(f.typeId, type);
+  }
   const isStatusField = (f: CbTrackerFieldConfig) => {
     const sf = schemaFor(f);
     return sf ? isStatusSchemaField(sf) : /^status$/i.test(f.label ?? f.title ?? "");
@@ -313,7 +391,7 @@ export function normalizeTracker(snapshot: TrackerSnapshot, lookups: Lookups = e
       id,
       name: nameOf(f),
       builtIn,
-      type: sf?.type ?? (f.typeId !== undefined ? `typeId ${f.typeId}` : undefined),
+      type: sf?.type ?? (f.typeId !== undefined ? (typeNames.get(f.typeId) ?? `typeId ${f.typeId}`) : undefined),
       isStatus: isStatusField(f),
       mandatory: f.mandatory === true,
       mandatoryExceptIn: (f.mandatoryExceptInStatus ?? []).map(statusName),
@@ -342,16 +420,29 @@ export function normalizeTracker(snapshot: TrackerSnapshot, lookups: Lookups = e
       references: setting?.referenceFilters?.map((r) => {
         const target = lookups.targets.get(`${r.domainType}:${r.domainId}`);
         const ownProject =
-          r.domainType === "TRACKER" && target?.projectId !== undefined && projectId !== undefined
-            ? target.projectId === projectId
-            : undefined;
+          projectId === undefined
+            ? undefined
+            : r.domainType === "PROJECT"
+              ? r.domainId === projectId
+              : r.domainType === "TRACKER" && target?.projectId !== undefined
+                ? target.projectId === projectId
+                : undefined;
+        const targetIds = r.targetIds ?? [];
+        const kind = referenceKind(setting?.type, sf?.type);
         return {
+          kind,
           domainType: r.domainType ?? "?",
           domainId: r.domainId,
           domainName: target?.name,
           targetProjectName: target?.projectName,
           ownProject,
-          targetIds: r.targetIds ?? [],
+          targetIds,
+          targetTypeNames:
+            r.domainType !== "PROJECT"
+              ? []
+              : kind === "members"
+                ? targetIds.map((id) => lookups.roles.get(id) ?? `role #${id}`)
+                : targetIds.map((id) => lookups.trackerTypes.get(id) ?? `type #${id}`),
           filterId: r.filterId,
           filterStatusId: r.filterStatusId,
           targetPermissions: [...(r.targetPermissions ?? [])].sort(),
@@ -363,10 +454,10 @@ export function normalizeTracker(snapshot: TrackerSnapshot, lookups: Lookups = e
   const transitions = snapshot.transitions?.map((t) => ({
     id: t.id,
     name: t.name ?? "",
-    from: t.fromStatus ? (t.fromStatus.name ?? statusName(t.fromStatus.id)) : "(initial)",
+    from: isInitialStatus(t.fromStatus) ? "(initial)" : (t.fromStatus!.name ?? statusName(t.fromStatus!.id)),
     to: t.toStatus ? (t.toStatus.name ?? statusName(t.toStatus.id)) : "?",
     hidden: t.hidden === true,
-    allowed: (t.permissions ?? []).map(describeAccess).sort(),
+    allowed: (t.permissions ?? []).map((p) => describeAccess(p, roleName, fieldName)).sort(),
   }));
 
   const permissions = snapshot.permissions?.map((rp) => ({
@@ -393,36 +484,67 @@ export function normalizeTracker(snapshot: TrackerSnapshot, lookups: Lookups = e
   };
 }
 
-function referenceConstraints(ref: NormalizedReference): string[] {
-  return [
-    ref.targetIds.length > 0 ? `targets ${[...ref.targetIds].sort((a, b) => a - b).join(",")}` : "",
+function referenceConstraints(ref: NormalizedReference): string {
+  const constraints = [
     ref.filterId ? `filter ${ref.filterId}` : "",
     ref.filterStatusId ? `filter status ${ref.filterStatusId}` : "",
     ref.targetPermissions.length > 0 ? `permissions ${ref.targetPermissions.join(",")}` : "",
   ].filter(Boolean);
+  return constraints.length > 0 ? ` (${constraints.join(", ")})` : "";
 }
 
-function referenceLocation(ref: NormalizedReference): string {
-  if (ref.ownProject === true) return " (own project)";
-  if (ref.ownProject === false) return ` (project ${ref.targetProjectName ?? "?"})`;
-  return "";
+function typeList(ref: NormalizedReference): string {
+  return [...ref.targetTypeNames].sort().map((n) => `"${n}"`).join(", ");
+}
+
+function anyTarget(ref: NormalizedReference): string {
+  return ref.kind === "members" ? "any user" : ref.kind === "projects" ? "any project" : "any item";
 }
 
 export function describeReference(ref: NormalizedReference): string {
-  const kind = ref.domainType === "TRACKER" ? "tracker" : ref.domainType === "PROJECT" ? "project" : ref.domainType;
-  const target = ref.domainName ? `"${ref.domainName}" [${ref.domainId}]` : `[${ref.domainId ?? "?"}]`;
-  const location = ref.ownProject === false ? ` in project ${ref.targetProjectName ?? "?"}` : "";
-  const constraints = referenceConstraints(ref);
-  return `${kind} ${target}${location}${constraints.length > 0 ? ` (${constraints.join(", ")})` : ""}`;
+  const named = (kind: string) =>
+    `${kind} ${ref.domainName ? `"${ref.domainName}" [${ref.domainId}]` : `[${ref.domainId ?? "?"}]`}`;
+  let text: string;
+  if (ref.domainId === undefined) {
+    text = anyTarget(ref);
+  } else if (ref.kind === "members") {
+    const where = ref.domainType === "PROJECT" ? (ref.ownProject ? "own project" : named("project")) : named(ref.domainType.toLowerCase());
+    text = ref.targetIds.length > 0 ? `members with role ${typeList(ref)} of ${where}` : `members of ${where}`;
+  } else if (ref.kind === "projects") {
+    text = named("project");
+  } else if (ref.domainType === "PROJECT" && ref.targetIds.length > 0) {
+    text = `trackers of type ${typeList(ref)} in ${ref.ownProject ? "own project" : named("project")}`;
+  } else if (ref.domainType === "PROJECT") {
+    text = ref.ownProject ? "any tracker in own project" : `any tracker in ${named("project")}`;
+  } else if (ref.domainType === "TRACKER") {
+    text = `${named("tracker")}${ref.ownProject === false ? ` in project ${ref.targetProjectName ?? "?"}` : ""}`;
+  } else {
+    text = named(ref.domainType.toLowerCase());
+  }
+  return `${text}${referenceConstraints(ref)}`;
 }
 
-// Comparable across projects: a referenced tracker is identified by name plus whether it lives in the
-// referencing tracker's own project, so a copied project that still points at the original project's
-// tracker shows up as a difference.
+// Comparable across projects: targets are identified by name plus whether they are in the referencing
+// tracker's own project. Two projects set up alike compare equal, while a copied project that still
+// points at the original project's tracker shows up as a difference.
 function referenceKey(ref: NormalizedReference): string {
-  const target = ref.domainName ?? `#${ref.domainId}`;
-  const constraints = referenceConstraints(ref);
-  return `${ref.domainType.toLowerCase()} ${target}${referenceLocation(ref)}${constraints.length > 0 ? ` (${constraints.join(", ")})` : ""}`;
+  const project = (name: string | undefined) => (ref.ownProject ? "own project" : `project ${name ?? `#${ref.domainId}`}`);
+  let key: string;
+  if (ref.domainId === undefined) {
+    key = anyTarget(ref);
+  } else if (ref.kind === "members") {
+    key = `members${ref.targetIds.length > 0 ? ` with role ${typeList(ref)}` : ""} of ${ref.domainType === "PROJECT" ? project(ref.domainName) : `${ref.domainType.toLowerCase()} ${ref.domainName ?? `#${ref.domainId}`}`}`;
+  } else if (ref.kind === "projects") {
+    key = project(ref.domainName);
+  } else if (ref.domainType === "PROJECT") {
+    key = `${ref.targetIds.length > 0 ? `type ${typeList(ref)}` : "any tracker"} in ${project(ref.domainName)}`;
+  } else if (ref.domainType === "TRACKER") {
+    const where = ref.ownProject === true ? " (own project)" : ref.ownProject === false ? ` (${project(ref.targetProjectName)})` : "";
+    key = `tracker ${ref.domainName ?? `#${ref.domainId}`}${where}`;
+  } else {
+    key = `${ref.domainType.toLowerCase()} ${ref.domainName ?? `#${ref.domainId}`}`;
+  }
+  return `${key}${referenceConstraints(ref)}`;
 }
 
 // --- Reference graph ---
@@ -435,10 +557,11 @@ export interface TrackerEdge {
   reference: NormalizedReference;
 }
 
+/** Edges for references to tracker items; user, member and project references are not tracker links. */
 export function buildReferenceEdges(trackers: NormalizedTracker[]): TrackerEdge[] {
   return trackers.flatMap((t) =>
     t.fields.flatMap((f) =>
-      (f.references ?? []).map((reference) => ({
+      (f.references ?? []).filter((r) => r.kind === "items" && r.domainId !== undefined).map((reference) => ({
         fromId: t.id,
         fromName: t.name,
         field: f.name,
@@ -447,6 +570,44 @@ export function buildReferenceEdges(trackers: NormalizedTracker[]): TrackerEdge[
       })),
     ),
   );
+}
+
+export type ProjectTrackers = Map<number, Array<{ id: number; name: string; type?: { id: number } }>>;
+
+/** Projects whose trackers are needed to resolve "trackers of type X in project P" references. */
+export function typeReferenceProjects(edges: TrackerEdge[]): number[] {
+  const ids = edges
+    .map((e) => e.reference)
+    .filter((r) => r.domainType === "PROJECT" && r.targetIds.length > 0 && r.domainId !== undefined)
+    .map((r) => r.domainId!);
+  return [...new Set(ids)];
+}
+
+/**
+ * Resolve "trackers of type X in project P" references to P's trackers of those types, so the graph
+ * points at real trackers. References whose project is unknown or matches no tracker are kept as they are.
+ */
+export function expandTypeReferences(edges: TrackerEdge[], projectTrackers: ProjectTrackers): TrackerEdge[] {
+  return edges.flatMap((edge) => {
+    const ref = edge.reference;
+    if (ref.domainType !== "PROJECT" || ref.domainId === undefined || ref.targetIds.length === 0) return [edge];
+    const matches = (projectTrackers.get(ref.domainId) ?? []).filter(
+      (t) => t.type !== undefined && ref.targetIds.includes(t.type.id),
+    );
+    if (matches.length === 0) return [edge];
+    return matches.map((t) => ({
+      ...edge,
+      reference: {
+        ...ref,
+        domainType: "TRACKER",
+        domainId: t.id,
+        domainName: t.name,
+        targetProjectName: ref.domainName,
+        targetIds: [],
+        targetTypeNames: [],
+      },
+    }));
+  });
 }
 
 function edgeKey(edge: TrackerEdge): string {
