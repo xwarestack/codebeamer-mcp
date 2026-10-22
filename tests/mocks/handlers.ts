@@ -83,6 +83,15 @@ export const handlers = [
   ),
 
   // Trackers
+  http.post(`${BASE}/projects/:projectId/trackers/search`, () =>
+    HttpResponse.json({
+      page: 1,
+      pageSize: 25,
+      total: 1,
+      trackers: [makeTracker({ templateTracker: { id: 900, name: "Requirements Template" } })],
+    }),
+  ),
+
   http.get(`${BASE}/projects/:projectId/trackers`, () =>
     HttpResponse.json([makeTracker()]),
   ),

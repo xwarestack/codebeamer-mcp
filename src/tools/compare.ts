@@ -135,9 +135,10 @@ export function registerCompareTools(
         client.listTrackers(projectIdB),
       ]);
 
-      // Project tracker lists only contain references; tracker details carry the tracker type.
+      // The fallback tracker list only contains references; tracker details carry the tracker type.
       const details = async (trackers: CbTracker[]) =>
         mapLimit(trackers, 5, async (t) => {
+          if (t.type?.name) return t;
           try {
             return await client.getTracker(t.id);
           } catch {

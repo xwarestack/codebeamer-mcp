@@ -1,4 +1,5 @@
 import { HttpClient } from "./http-client.js";
+import { CbAuthError, CbError } from "./errors.js";
 
 // --- Response types (only fields used by formatters) ---
 
@@ -26,6 +27,8 @@ export interface CbTracker {
   project?: CbReference;
   description?: string;
   keyName?: string;
+  templateTracker?: CbReference;
+  hidden?: boolean;
 }
 
 export interface CbTrackerField {
@@ -305,8 +308,8 @@ export interface CbAssociationType {
 
 // Codebeamer API returns either a plain array or a paginated object depending on the endpoint/version.
 // Known keys: "items" (query endpoint), "itemRefs" (tracker items endpoint in some versions),
-// "members" / "users" (member and user search results).
-const KNOWN_ARRAY_KEYS = ["items", "itemRefs", "members", "users"];
+// "members" / "users" / "trackers" (member, user and tracker search results).
+const KNOWN_ARRAY_KEYS = ["items", "itemRefs", "members", "users", "trackers"];
 
 function toArray<T>(response: unknown): T[] {
   if (Array.isArray(response)) return response as T[];
@@ -352,8 +355,18 @@ export class CodebeamerClient {
     return this.http.get(`/projects/${id}`, { resource: `project ${id}` });
   }
 
-  // Trackers (not paginated either)
+  // Trackers. The search endpoint returns full trackers (type, key, template) in one call; the plain
+  // list only has IDs and names, so it remains the fallback for versions without search.
   async listTrackers(projectId: number): Promise<CbTracker[]> {
+    try {
+      const raw = await this.http.post<unknown>(`/projects/${projectId}/trackers/search`, {
+        body: {},
+        resource: `trackers for project ${projectId}`,
+      });
+      return toArray(raw);
+    } catch (err) {
+      if (!(err instanceof CbError) || err instanceof CbAuthError) throw err;
+    }
     const raw = await this.http.get<unknown>(`/projects/${projectId}/trackers`, {
       resource: `trackers for project ${projectId}`,
     });

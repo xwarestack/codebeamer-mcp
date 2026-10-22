@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { http, HttpResponse } from "msw";
+import { mockServer } from "../../setup.js";
 import { HttpClient } from "../../../src/client/http-client.js";
 import { CodebeamerClient } from "../../../src/client/codebeamer-client.js";
 import {
@@ -25,8 +27,31 @@ describe("list_trackers", () => {
 
     expect(text).toContain("## Trackers");
     expect(text).toContain("1 total");
-    expect(text).toContain("Bug Tracker");
-    expect(text).toContain("100");
+    expect(text).toContain("| 100 | Bug Tracker | Bug | BUG | Requirements Template [900] |");
+  });
+
+  it("falls back to the plain tracker list when search is not available", async () => {
+    mockServer.use(
+      http.post(`${BASE}/projects/:projectId/trackers/search`, () =>
+        HttpResponse.json({ message: "Not found" }, { status: 404 }),
+      ),
+      http.get(`${BASE}/projects/:projectId/trackers`, () =>
+        HttpResponse.json([{ id: 7, name: "Tasks", type: "TrackerReference" }]),
+      ),
+    );
+
+    const text = formatTrackerList(await makeClient().listTrackers(1));
+    expect(text).toContain("| 7 | Tasks | - | - | - |");
+  });
+
+  it("does not hide authentication errors behind the fallback", async () => {
+    mockServer.use(
+      http.post(`${BASE}/projects/:projectId/trackers/search`, () =>
+        HttpResponse.json({}, { status: 401 }),
+      ),
+    );
+
+    await expect(makeClient().listTrackers(1)).rejects.toThrow(/Authentication failed/);
   });
 });
 

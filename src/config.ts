@@ -3,7 +3,8 @@ function requireEnv(name: string): string {
   if (!value) {
     throw new Error(
       `Missing required environment variable: ${name}. ` +
-        `Set it in .env or as an environment variable.`,
+        `Set it in the "env" section of your MCP client's server configuration, ` +
+        `or as a system/user environment variable (see README > Installation).`,
     );
   }
   return value;
