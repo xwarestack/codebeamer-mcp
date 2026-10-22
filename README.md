@@ -2,8 +2,6 @@
 
 An MCP (Model Context Protocol) server for Codebeamer ALM. Allows Claude and other MCP clients to read and write projects, trackers, and items, review and compare tracker configuration, and reach the complete Codebeamer REST v3 API using natural language.
 
-[![codebeamer-mcp MCP server](https://glama.ai/mcp/servers/3KniGHtcZ/codebeamer-mcp/badges/card.svg)](https://glama.ai/mcp/servers/3KniGHtcZ/codebeamer-mcp)
-
 ## Tools (35)
 
 The server runs **read-only by default**. Write tools are only registered with `CB_MODE=write` or `CB_MODE=admin` (see [Access modes](#access-modes)).
@@ -98,6 +96,8 @@ Every tool carries MCP annotations (`readOnlyHint` / `destructiveHint`), so clie
 
 ## Installation
 
+> **Not on npm yet.** The `npx` / `npm install -g` commands below work once `@xwarestack/codebeamer-mcp` is published (push a `v*` tag; requires the `xwarestack` npm organization and the `NPM_TOKEN` secret). Until then, build a package file with `npm run build && npm pack`, install it with `npm install -g ./xwarestack-codebeamer-mcp-<version>.tgz`, and use `"command": "node"` with the full path to its `dist/index.js` (find it with `npm root -g`).
+
 ### Requirements
 - Node.js 20+
 - Access to a Codebeamer instance (URL, username, password)
@@ -109,7 +109,7 @@ The fastest way — run this command in your terminal:
 ```bash
 claude mcp add codebeamer -e CB_URL=https://your-instance.example.com/cb/api \
   -e CB_USERNAME=your_username -e CB_PASSWORD=your_password \
-  -- npx -y codebeamer-mcp
+  -- npx -y @xwarestack/codebeamer-mcp
 ```
 
 Or add it manually to `.mcp.json` in the project root (or `~/.claude/mcp.json` for global scope):
@@ -120,7 +120,7 @@ Or add it manually to `.mcp.json` in the project root (or `~/.claude/mcp.json` f
     "codebeamer": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "codebeamer-mcp"],
+      "args": ["-y", "@xwarestack/codebeamer-mcp"],
       "env": {
         "CB_URL": "https://your-instance.example.com/cb/api",
         "CB_USERNAME": "your_username",
@@ -146,7 +146,7 @@ Edit the config file for your platform:
   "mcpServers": {
     "codebeamer": {
       "command": "npx",
-      "args": ["-y", "codebeamer-mcp"],
+      "args": ["-y", "@xwarestack/codebeamer-mcp"],
       "env": {
         "CB_URL": "https://your-instance.example.com/cb/api",
         "CB_USERNAME": "your_username",
@@ -168,7 +168,7 @@ Add to `.cursor/mcp.json` in the project root (project scope) or `~/.cursor/mcp.
   "mcpServers": {
     "codebeamer": {
       "command": "npx",
-      "args": ["-y", "codebeamer-mcp"],
+      "args": ["-y", "@xwarestack/codebeamer-mcp"],
       "env": {
         "CB_URL": "https://your-instance.example.com/cb/api",
         "CB_USERNAME": "your_username",
@@ -188,7 +188,7 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
   "mcpServers": {
     "codebeamer": {
       "command": "npx",
-      "args": ["-y", "codebeamer-mcp"],
+      "args": ["-y", "@xwarestack/codebeamer-mcp"],
       "env": {
         "CB_URL": "https://your-instance.example.com/cb/api",
         "CB_USERNAME": "your_username",
@@ -209,7 +209,7 @@ Add to `.vscode/mcp.json` in the project root:
     "codebeamer": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "codebeamer-mcp"],
+      "args": ["-y", "@xwarestack/codebeamer-mcp"],
       "env": {
         "CB_URL": "https://your-instance.example.com/cb/api",
         "CB_USERNAME": "your_username",
@@ -229,7 +229,7 @@ Add to `~/.gemini/settings.json`:
   "mcpServers": {
     "codebeamer": {
       "command": "npx",
-      "args": ["-y", "codebeamer-mcp"],
+      "args": ["-y", "@xwarestack/codebeamer-mcp"],
       "env": {
         "CB_URL": "https://your-instance.example.com/cb/api",
         "CB_USERNAME": "your_username",
@@ -243,7 +243,7 @@ Add to `~/.gemini/settings.json`:
 ### Alternative: global install
 
 ```bash
-npm install -g codebeamer-mcp
+npm install -g @xwarestack/codebeamer-mcp
 ```
 
 Then use `"command": "codebeamer-mcp"` (no `args`) instead of `npx` in any config above.
@@ -251,23 +251,23 @@ Then use `"command": "codebeamer-mcp"` (no `args`) instead of `npx` in any confi
 ### Pinning a specific version
 
 ```json
-"args": ["-y", "codebeamer-mcp@0.2.0"]
+"args": ["-y", "@xwarestack/codebeamer-mcp@0.6.0"]
 ```
 
 ### Updates
 
 | Method | Update behavior |
 |---|---|
-| `npx -y codebeamer-mcp` | Always fetches the latest version |
-| `npm install -g codebeamer-mcp` | Stays on installed version. Run `npm update -g codebeamer-mcp` to update |
-| Pinned version (`@0.2.0`) | Never auto-updates; change the version string manually |
+| `npx -y @xwarestack/codebeamer-mcp` | Always fetches the latest version |
+| `npm install -g @xwarestack/codebeamer-mcp` | Stays on installed version. Run `npm update -g @xwarestack/codebeamer-mcp` to update |
+| Pinned version (`@0.6.0`) | Never auto-updates; change the version string manually |
 
 > ⚠️ **Never commit `.mcp.json` with real credentials** — it is listed in `.gitignore`.
 
 ### From source (development)
 
 ```bash
-git clone https://github.com/3KniGHtcZ/codebeamer-mcp.git
+git clone https://github.com/xwarestack/codebeamer-mcp.git
 cd codebeamer-mcp
 npm install
 npm run build
