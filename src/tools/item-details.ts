@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CodebeamerClient } from "../client/codebeamer-client.js";
+import { READ_ONLY } from "./annotations.js";
 import {
   formatRelations,
   formatReferences,
@@ -28,6 +29,7 @@ export function registerItemDetailTools(
           .positive()
           .describe("Numeric item (work item) ID"),
       },
+      annotations: READ_ONLY,
     },
     async ({ itemId }) => {
       const item = await client.getItem(itemId);
@@ -49,6 +51,7 @@ export function registerItemDetailTools(
           .positive()
           .describe("Numeric item ID"),
       },
+      annotations: READ_ONLY,
     },
     async ({ itemId }) => {
       const page = await client.getItemRelations(itemId);
@@ -71,6 +74,7 @@ export function registerItemDetailTools(
           .positive()
           .describe("Numeric item ID"),
       },
+      annotations: READ_ONLY,
     },
     async ({ itemId }) => {
       const page = await client.getItemRelations(itemId);
@@ -91,6 +95,7 @@ export function registerItemDetailTools(
           .positive()
           .describe("Numeric item ID"),
       },
+      annotations: READ_ONLY,
     },
     async ({ itemId }) => {
       const comments = await client.getItemComments(itemId);
@@ -113,6 +118,7 @@ export function registerItemDetailTools(
           .positive()
           .describe("Numeric item ID"),
       },
+      annotations: READ_ONLY,
     },
     async ({ itemId }) => {
       const reviews = await client.getItemReviews(itemId);

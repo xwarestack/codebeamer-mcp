@@ -1,7 +1,27 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { CodebeamerClient } from "../client/codebeamer-client.js";
+import type {
+  CodebeamerClient,
+  CbTrackerSchemaField,
+} from "../client/codebeamer-client.js";
 import { formatItem } from "../formatters/item-formatter.js";
+import { ADDITIVE_WRITE } from "./annotations.js";
+
+function findField(
+  schema: CbTrackerSchemaField[],
+  trackerId: number,
+  label: string,
+  pattern: RegExp,
+): CbTrackerSchemaField {
+  const field = schema.find((f) => pattern.test(f.name));
+  if (!field) {
+    throw new Error(
+      `Tracker ${trackerId} has no ${label} field (looked for a field name matching ${pattern}). ` +
+        `Available fields: ${schema.map((f) => f.name).join(", ")}.`,
+    );
+  }
+  return field;
+}
 
 export function registerRiskWriteTools(
   server: McpServer,
@@ -44,15 +64,22 @@ export function registerRiskWriteTools(
           .optional()
           .describe("Parent item ID to nest this harm inside (e.g. a folder)"),
       },
+      annotations: ADDITIVE_WRITE,
     },
     async ({ trackerId, name, description, imdrfCode, severity, parentId }) => {
       const customFields: Array<{ fieldId: number; type: string; value: unknown }> = [];
 
-      if (imdrfCode !== undefined) {
-        customFields.push({ fieldId: 10000, type: "TextFieldValue", value: imdrfCode });
-      }
-      if (severity !== undefined) {
-        customFields.push({ fieldId: 10001, type: "IntegerFieldValue", value: severity });
+      if (imdrfCode !== undefined || severity !== undefined) {
+        // Custom field IDs differ between trackers, so resolve them by name instead of hardcoding.
+        const schema = await client.getTrackerSchema(trackerId);
+        if (imdrfCode !== undefined) {
+          const field = findField(schema, trackerId, "IMDRF code", /imdrf/i);
+          customFields.push({ fieldId: field.id, type: "TextFieldValue", value: imdrfCode });
+        }
+        if (severity !== undefined) {
+          const field = findField(schema, trackerId, "Severity", /severity/i);
+          customFields.push({ fieldId: field.id, type: "IntegerFieldValue", value: severity });
+        }
       }
 
       const data = {

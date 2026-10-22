@@ -48,6 +48,9 @@ export interface CbTrackerSchemaField {
   trackerItemField?: string;
   legacyRestName?: string;
   options?: CbTrackerSchemaOption[];
+  hidden?: boolean;
+  multipleValues?: boolean;
+  referenceType?: string;
 }
 
 export interface CbTestStep {
@@ -179,16 +182,125 @@ export interface CbAssociation {
   description?: string;
 }
 
+export interface CbPage<T> {
+  items: T[];
+  total?: number;
+  page?: number;
+  pageSize?: number;
+}
+
+// --- Configuration types (GET /tracker/{id}/configuration and related) ---
+
+export interface CbTrackerBasicInformation {
+  trackerId?: number;
+  projectId?: number;
+  name?: string;
+  key?: string;
+  description?: string;
+  issueTypeId?: number;
+  template?: boolean;
+  templateId?: number;
+  workflowIsActive?: boolean;
+  locked?: boolean;
+  hidden?: boolean;
+  [key: string]: unknown;
+}
+
+export interface CbChoiceOptionConfig {
+  id: number;
+  name: string;
+  color?: string;
+  description?: string;
+  meanings?: string[];
+  restrictedToStatuses?: number[];
+  defaultInStatuses?: number[];
+}
+
+export interface CbReferenceFilter {
+  id?: number;
+  domainId?: number;
+  domainType?: string;
+  filterId?: number;
+  filterStatusId?: number;
+  targetIds?: number[];
+  targetPermissions?: string[];
+}
+
+// Discriminated by `type` in the spec (CHOICE_OPTIONS, CHOICE_TRACKERS, CHOICE_USERS, ...);
+// consumers check the shape instead, since the discriminator values vary between versions.
+export interface CbChoiceOptionSetting {
+  type?: string;
+  choiceOptions?: CbChoiceOptionConfig[];
+  referenceFilters?: CbReferenceFilter[];
+}
+
+export interface CbTrackerFieldConfig {
+  referenceId?: number;
+  label?: string;
+  title?: string;
+  typeId?: number;
+  description?: string;
+  mandatory?: boolean;
+  hidden?: boolean;
+  multipleSelection?: boolean;
+  computedAs?: string;
+  hideIfFormula?: string;
+  mandatoryIfFormula?: string;
+  mandatoryExceptInStatus?: number[];
+  choiceOptionSetting?: CbChoiceOptionSetting;
+  permission?: { type?: string; [key: string]: unknown };
+  dependency?: { dependentFieldId?: number; valueCombinations?: unknown };
+  position?: number;
+  [key: string]: unknown;
+}
+
+export interface CbTrackerConfiguration {
+  basicInformation?: CbTrackerBasicInformation;
+  fields?: CbTrackerFieldConfig[];
+}
+
+export interface CbAccessPermission {
+  accessLevel?: string;
+  role?: CbReference;
+  project?: CbReference;
+  field?: CbReference;
+}
+
+export interface CbWorkflowTransition {
+  id: number;
+  name?: string;
+  description?: string;
+  fromStatus?: CbReference;
+  toStatus?: CbReference;
+  hidden?: boolean;
+  permissions?: CbAccessPermission[];
+}
+
+export interface CbRoleWithPermissions {
+  role?: CbReference;
+  trackerPermissions?: CbReference[];
+}
+
+export interface CbAssociationType {
+  id: number;
+  name: string;
+  description?: string;
+}
+
 // --- Helpers ---
 
 // Codebeamer API returns either a plain array or a paginated object depending on the endpoint/version.
-// Known keys: "items" (query endpoint), "itemRefs" (tracker items endpoint in some versions).
+// Known keys: "items" (query endpoint), "itemRefs" (tracker items endpoint in some versions),
+// "members" / "users" (member and user search results).
+const KNOWN_ARRAY_KEYS = ["items", "itemRefs", "members", "users"];
+
 function toArray<T>(response: unknown): T[] {
   if (Array.isArray(response)) return response as T[];
   if (response && typeof response === "object") {
     const obj = response as Record<string, unknown>;
-    if (Array.isArray(obj["items"])) return obj["items"] as T[];
-    if (Array.isArray(obj["itemRefs"])) return obj["itemRefs"] as T[];
+    for (const key of KNOWN_ARRAY_KEYS) {
+      if (Array.isArray(obj[key])) return obj[key] as T[];
+    }
     // Generic fallback: find first array-valued key
     for (const key of Object.keys(obj)) {
       if (Array.isArray(obj[key])) {
@@ -201,15 +313,22 @@ function toArray<T>(response: unknown): T[] {
   return [];
 }
 
+function toPage<T>(response: unknown): CbPage<T> {
+  const items = toArray<T>(response);
+  if (Array.isArray(response) || !response || typeof response !== "object") return { items };
+  const obj = response as Record<string, unknown>;
+  const num = (key: string) => (typeof obj[key] === "number" ? (obj[key] as number) : undefined);
+  return { items, total: num("total"), page: num("page"), pageSize: num("pageSize") };
+}
+
 // --- Client ---
 
 export class CodebeamerClient {
   constructor(private readonly http: HttpClient) {}
 
-  // Projects
-  async listProjects(page: number, pageSize: number): Promise<CbProject[]> {
+  // Projects (the v3 endpoint is not paginated: it always returns every accessible project)
+  async listProjects(): Promise<CbProject[]> {
     const raw = await this.http.get<unknown>("/projects", {
-      params: { page, pageSize },
       resource: "projects",
     });
     return toArray(raw);
@@ -219,14 +338,9 @@ export class CodebeamerClient {
     return this.http.get(`/projects/${id}`, { resource: `project ${id}` });
   }
 
-  // Trackers
-  async listTrackers(
-    projectId: number,
-    page: number,
-    pageSize: number,
-  ): Promise<CbTracker[]> {
+  // Trackers (not paginated either)
+  async listTrackers(projectId: number): Promise<CbTracker[]> {
     const raw = await this.http.get<unknown>(`/projects/${projectId}/trackers`, {
-      params: { page, pageSize },
       resource: `trackers for project ${projectId}`,
     });
     return toArray(raw);
@@ -257,13 +371,13 @@ export class CodebeamerClient {
     trackerId: number,
     page: number,
     pageSize: number,
-  ): Promise<{ items: CbItem[]; debug?: string }> {
+  ): Promise<CbPage<CbItem> & { debug?: string }> {
     const raw = await this.http.get<unknown>("/items/query", {
       params: { queryString: `tracker.id IN (${trackerId})`, page, pageSize },
       resource: `items for tracker ${trackerId}`,
     });
-    const items = toArray<CbItem>(raw);
-    if (items.length > 0) return { items };
+    const result = toPage<CbItem>(raw);
+    if (result.items.length > 0) return result;
 
     // Items empty — also try the direct endpoint so we can show raw debug info
     let rawDirect: unknown;
@@ -281,8 +395,8 @@ export class CodebeamerClient {
     const directTotal = directObj?.["total"] ?? "?";
     const directItems = toArray<CbItem>(rawDirect);
     const debug =
-      `API vrátilo total=${queryTotal} pro cbQL query a total=${directTotal} pro přímý endpoint.\n` +
-      `Pokud je total=0, Codebeamer říká že tam žádné itemy nejsou (špatný tracker ID, chybí oprávnění nebo prázdný tracker).\n` +
+      `API returned total=${queryTotal} for the cbQL query and total=${directTotal} for the direct endpoint.\n` +
+      `total=0 means Codebeamer reports no items (wrong tracker ID, missing permission, or an empty tracker).\n` +
       `query: ${JSON.stringify(raw).slice(0, 300)}\n` +
       `direct: ${JSON.stringify(rawDirect).slice(0, 300)}`;
     return { items: directItems, debug };
@@ -292,12 +406,12 @@ export class CodebeamerClient {
     queryString: string,
     page: number,
     pageSize: number,
-  ): Promise<CbItem[]> {
+  ): Promise<CbPage<CbItem>> {
     const raw = await this.http.get<unknown>("/items/query", {
       params: { queryString, page, pageSize },
       resource: "item query",
     });
-    return toArray(raw);
+    return toPage(raw);
   }
 
   // Item reviews (Review Hub)
@@ -327,6 +441,69 @@ export class CodebeamerClient {
     return this.http.get(`/users/${id}`, { resource: `user ${id}` });
   }
 
+  findUserByEmail(email: string): Promise<CbUser> {
+    return this.http.get("/users/findByEmail", {
+      params: { email },
+      resource: `user with email ${email}`,
+    });
+  }
+
+  async searchUsers(queryString: string, page: number, pageSize: number): Promise<CbPage<CbReference>> {
+    const raw = await this.http.get<unknown>("/users", {
+      params: { queryString, page, pageSize },
+      resource: "user search",
+    });
+    return toPage(raw);
+  }
+
+  // Configuration
+  getTrackerConfiguration(trackerId: number): Promise<CbTrackerConfiguration> {
+    return this.http.get(`/tracker/${trackerId}/configuration`, {
+      resource: `configuration of tracker ${trackerId}`,
+    });
+  }
+
+  async getTrackerTransitions(trackerId: number): Promise<CbWorkflowTransition[]> {
+    const raw = await this.http.get<unknown>(`/trackers/${trackerId}/transitions`, {
+      resource: `transitions of tracker ${trackerId}`,
+    });
+    return toArray(raw);
+  }
+
+  async getTrackerPermissions(
+    trackerId: number,
+    filter: { roleId?: number; userId?: number } = {},
+  ): Promise<CbRoleWithPermissions[]> {
+    const raw = await this.http.get<unknown>(`/trackers/${trackerId}/permissions`, {
+      params: { roleId: filter.roleId, userId: filter.userId },
+      resource: `permissions of tracker ${trackerId}`,
+    });
+    return toArray(raw);
+  }
+
+  async listTrackerTypes(): Promise<CbReference[]> {
+    const raw = await this.http.get<unknown>("/trackers/types", { resource: "tracker types" });
+    return toArray(raw);
+  }
+
+  async listRoles(): Promise<CbReference[]> {
+    const raw = await this.http.get<unknown>("/roles", { resource: "roles" });
+    return toArray(raw);
+  }
+
+  async listAssociationTypes(): Promise<CbAssociationType[]> {
+    const raw = await this.http.get<unknown>("/associations/types", { resource: "association types" });
+    return toArray(raw);
+  }
+
+  async getProjectMembers(projectId: number, page: number, pageSize: number): Promise<CbPage<CbReference>> {
+    const raw = await this.http.get<unknown>(`/projects/${projectId}/members`, {
+      params: { page, pageSize },
+      resource: `members of project ${projectId}`,
+    });
+    return toPage(raw);
+  }
+
   // --- Write operations ---
 
   createItem(trackerId: number, data: CbCreateItemRequest, parentId?: number): Promise<CbItem> {
@@ -349,42 +526,49 @@ export class CodebeamerClient {
       schema.find((f) => f.legacyRestName === legacyName);
 
     const fieldValues: Array<Record<string, unknown>> = [];
+    const missing: string[] = [];
+    const set = (
+      requested: string,
+      field: CbTrackerSchemaField | undefined,
+      value: Record<string, unknown>,
+    ) => {
+      if (field) fieldValues.push({ fieldId: field.id, ...value });
+      else missing.push(requested);
+    };
 
     if (data.name !== undefined) {
-      const f = fieldByLegacy("name") ?? fieldByLegacy("summary");
-      if (f) fieldValues.push({ fieldId: f.id, type: "TextFieldValue", value: data.name });
+      set("name", fieldByLegacy("name") ?? fieldByLegacy("summary"), { type: "TextFieldValue", value: data.name });
     }
     if (data.description !== undefined) {
-      const f = fieldByLegacy("description");
-      if (f) fieldValues.push({ fieldId: f.id, type: "WikiTextFieldValue", value: data.description });
+      set("description", fieldByLegacy("description"), { type: "WikiTextFieldValue", value: data.description });
     }
     if (data.status !== undefined) {
-      const f = fieldByLegacy("status");
-      if (f) fieldValues.push({
-        fieldId: f.id,
+      set("status", fieldByLegacy("status"), {
         type: "ChoiceFieldValue",
         values: [{ id: data.status.id, type: "ChoiceOptionReference" }],
       });
     }
     if (data.priority !== undefined) {
-      const f = fieldByLegacy("priority");
-      if (f) fieldValues.push({
-        fieldId: f.id,
+      set("priority", fieldByLegacy("priority"), {
         type: "ChoiceFieldValue",
         values: [{ id: data.priority.id, type: "ChoiceOptionReference" }],
       });
     }
     if (data.assignedTo !== undefined) {
-      const f = fieldByLegacy("assignedTo");
-      if (f) fieldValues.push({
-        fieldId: f.id,
+      set("assignedTo", fieldByLegacy("assignedTo"), {
         type: "ChoiceFieldValue",
         values: data.assignedTo.map((u) => ({ id: u.id, type: "UserReference" })),
       });
     }
     if (data.storyPoints !== undefined) {
-      const f = fieldByLegacy("storyPoints");
-      if (f) fieldValues.push({ fieldId: f.id, type: "IntegerFieldValue", value: data.storyPoints });
+      set("storyPoints", fieldByLegacy("storyPoints"), { type: "IntegerFieldValue", value: data.storyPoints });
+    }
+
+    // Refuse partial updates: silently dropping a requested field would report success for a change that never happened.
+    if (missing.length > 0) {
+      throw new Error(
+        `Tracker ${trackerId} has no field for: ${missing.join(", ")}. Nothing was updated.`,
+      );
     }
 
     if (fieldValues.length === 0) return item;
@@ -448,6 +632,7 @@ export class CodebeamerClient {
     const newValues = [...existingValues, { id: fromItemId, type: "TrackerItemReference" }];
 
     await this.http.put(`/items/${toItemId}/fields`, {
+      params: { quietMode: true },
       body: {
         fieldValues: [
           {

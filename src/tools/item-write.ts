@@ -6,6 +6,7 @@ import type {
   CbUpdateItemRequest,
 } from "../client/codebeamer-client.js";
 import { formatItem } from "../formatters/item-formatter.js";
+import { ADDITIVE_WRITE, DESTRUCTIVE_WRITE } from "./annotations.js";
 
 export function registerItemWriteTools(
   server: McpServer,
@@ -67,6 +68,7 @@ export function registerItemWriteTools(
           .optional()
           .describe("Parent item ID to nest this item inside (e.g. a folder)"),
       },
+      annotations: ADDITIVE_WRITE,
     },
     async ({ trackerId, name, description, statusId, priorityId, assignedToIds, storyPoints, isFolder, itemTypeName, parentId }) => {
       const data: CbCreateItemRequest = { name };
@@ -75,9 +77,14 @@ export function registerItemWriteTools(
         const schema = await client.getTrackerSchema(trackerId);
         const typeField = schema.find((f) => f.trackerItemField === "categories" || f.legacyRestName === "type");
         const option = typeField?.options?.find((o) => o.name.toLowerCase() === desiredType.toLowerCase());
-        if (option) {
-          data.categories = [{ id: option.id, type: "ChoiceOptionReference" }];
+        if (!option) {
+          const available = typeField?.options?.map((o) => o.name).join(", ");
+          throw new Error(
+            `Item type "${desiredType}" not found in tracker ${trackerId}. ` +
+              (available ? `Available types: ${available}.` : "The tracker has no item type field."),
+          );
         }
+        data.categories = [{ id: option.id, type: "ChoiceOptionReference" }];
       }
       if (description !== undefined) data.description = description;
       if (statusId !== undefined) data.status = { id: statusId };
@@ -132,6 +139,7 @@ export function registerItemWriteTools(
           .optional()
           .describe("New story points estimate"),
       },
+      annotations: DESTRUCTIVE_WRITE,
     },
     async ({ itemId, name, description, statusId, priorityId, assignedToIds, storyPoints }) => {
       const data: CbUpdateItemRequest = {};

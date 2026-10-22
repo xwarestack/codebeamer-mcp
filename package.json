@@ -17,6 +17,7 @@
   },
   "files": [
     "dist",
+    "docs/codebeamer-openapi-v3.json",
     "package.json"
   ],
   "repository": {

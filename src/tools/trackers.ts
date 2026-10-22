@@ -5,6 +5,7 @@ import {
   formatTrackerList,
   formatTracker,
 } from "../formatters/tracker-formatter.js";
+import { READ_ONLY } from "./annotations.js";
 
 export function registerTrackerTools(
   server: McpServer,
@@ -23,23 +24,11 @@ export function registerTrackerTools(
           .int()
           .positive()
           .describe("Numeric project ID"),
-        page: z
-          .number()
-          .int()
-          .min(1)
-          .default(1)
-          .describe("Page number (starts at 1)"),
-        pageSize: z
-          .number()
-          .int()
-          .min(1)
-          .max(100)
-          .default(25)
-          .describe("Items per page (max 100)"),
       },
+      annotations: READ_ONLY,
     },
-    async ({ projectId, page, pageSize }) => {
-      const result = await client.listTrackers(projectId, page, pageSize);
+    async ({ projectId }) => {
+      const result = await client.listTrackers(projectId);
       return { content: [{ type: "text", text: formatTrackerList(result) }] };
     },
   );
@@ -59,6 +48,7 @@ export function registerTrackerTools(
           .positive()
           .describe("Numeric tracker ID"),
       },
+      annotations: READ_ONLY,
     },
     async ({ trackerId }) => {
       const [tracker, fields, { items }] = await Promise.all([

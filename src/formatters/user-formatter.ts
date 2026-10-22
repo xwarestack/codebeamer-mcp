@@ -1,4 +1,25 @@
-import type { CbUser } from "../client/codebeamer-client.js";
+import type { CbPage, CbReference, CbUser } from "../client/codebeamer-client.js";
+import { cell } from "./item-formatter.js";
+
+export function formatUserSearch(
+  query: string,
+  result: CbPage<CbReference>,
+  page: number,
+  pageSize: number,
+): string {
+  const total = result.total ?? result.items.length;
+  const header = `## Users matching "${query}" (${result.items.length} of ${total})`;
+  if (result.items.length === 0) return `${header}\n\n_No users found._`;
+  const lines = [
+    header,
+    "",
+    "| ID | Username |",
+    "|----|----------|",
+    ...result.items.map((u) => `| ${u.id} | ${cell(u.name)} |`),
+  ];
+  if (page * pageSize < total) lines.push("", `_More users available: request page ${page + 1}._`);
+  return lines.join("\n");
+}
 
 export function formatUser(user: CbUser): string {
   const lines: string[] = [

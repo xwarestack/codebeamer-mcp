@@ -3,10 +3,76 @@ import { makeProject } from "./fixtures/projects.js";
 import { makeTracker, makeTrackerField } from "./fixtures/trackers.js";
 import { makeItem, makeItemRelationsPage, makeComment, makeTestCaseItem } from "./fixtures/items.js";
 import { makeUser } from "./fixtures/users.js";
+import { configurations, permissions, schemas, transitions } from "./fixtures/configuration.js";
 
 const BASE = "https://test-cb.example.com/v3";
 
 export const handlers = [
+  // Configuration (listed before /trackers/:id and /users/:id so literal segments win)
+  http.get(`${BASE}/tracker/:id/configuration`, ({ params }) => {
+    const config = configurations[Number(params.id)];
+    return config
+      ? HttpResponse.json(config)
+      : HttpResponse.json({ message: "Tracker not found" }, { status: 404 });
+  }),
+
+  http.get(`${BASE}/trackers/types`, () =>
+    HttpResponse.json([
+      { id: 1, name: "Requirement", type: "TrackerTypeReference" },
+      { id: 2, name: "Bug", type: "TrackerTypeReference" },
+    ]),
+  ),
+
+  http.get(`${BASE}/trackers/:id/transitions`, ({ params }) =>
+    HttpResponse.json(transitions[Number(params.id)] ?? []),
+  ),
+
+  http.get(`${BASE}/trackers/:id/permissions`, ({ params, request }) => {
+    const roleId = new URL(request.url).searchParams.get("roleId");
+    const all = permissions[Number(params.id)] ?? [];
+    return HttpResponse.json(roleId ? all.filter((p) => p.role?.id === Number(roleId)) : all);
+  }),
+
+  http.get(`${BASE}/roles`, () =>
+    HttpResponse.json([
+      { id: 5, name: "Developer", type: "RoleReference" },
+      { id: 6, name: "Reviewer", type: "RoleReference" },
+    ]),
+  ),
+
+  http.get(`${BASE}/associations/types`, () =>
+    HttpResponse.json([
+      { id: 1, name: "depends", description: "Depends on" },
+      { id: 4, name: "related", description: "Related to" },
+    ]),
+  ),
+
+  http.get(`${BASE}/projects/:projectId/members`, () =>
+    HttpResponse.json({
+      page: 1,
+      pageSize: 100,
+      total: 2,
+      members: [
+        { id: 5, name: "john.doe", type: "UserReference" },
+        { id: 9, name: "QA Team", type: "UserGroupReference" },
+      ],
+    }),
+  ),
+
+  http.get(`${BASE}/users/findByEmail`, ({ request }) => {
+    const email = new URL(request.url).searchParams.get("email") ?? "";
+    return HttpResponse.json(makeUser({ email }));
+  }),
+
+  http.get(`${BASE}/users`, () =>
+    HttpResponse.json({
+      page: 1,
+      pageSize: 25,
+      total: 1,
+      users: [{ id: 5, name: "john.doe", type: "UserReference" }],
+    }),
+  ),
+
   // Projects
   http.get(`${BASE}/projects`, () =>
     HttpResponse.json([makeProject(), makeProject({ id: 2, name: "Second Project", keyName: "SEC" })]),
@@ -28,8 +94,8 @@ export const handlers = [
     ]),
   ),
 
-  http.get(`${BASE}/trackers/:id/schema`, () =>
-    HttpResponse.json([
+  http.get(`${BASE}/trackers/:id/schema`, ({ params }) =>
+    HttpResponse.json(schemas[Number(params.id)] ?? [
       { id: 1, name: "Summary", legacyRestName: "name" },
       { id: 3, name: "Description", legacyRestName: "description" },
       { id: 7, name: "Status", legacyRestName: "status" },

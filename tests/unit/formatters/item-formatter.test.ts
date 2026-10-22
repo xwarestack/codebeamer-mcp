@@ -19,7 +19,23 @@ describe("formatItemList", () => {
     expect(text).toContain("| 500 |");
     expect(text).toContain("| 501 |");
     expect(text).toContain("Closed");
-    expect(text).toContain("2 total");
+    expect(text).toContain("## Items (2)");
+  });
+
+  it("shows the real total and a next-page hint when more pages exist", () => {
+    const text = formatItemList([makeItem()], { total: 60, page: 1, pageSize: 25 });
+    expect(text).toContain("## Items (1 of 60, page 1)");
+    expect(text).toContain("request page 2");
+  });
+
+  it("omits the next-page hint on the last page", () => {
+    const text = formatItemList([makeItem()], { total: 26, page: 2, pageSize: 25 });
+    expect(text).not.toContain("request page");
+  });
+
+  it("escapes pipes in item names so the table stays intact", () => {
+    const text = formatItemList([makeItem({ name: "A | B" })]);
+    expect(text).toContain("A \\| B");
   });
 });
 

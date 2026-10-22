@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { http, HttpResponse } from "msw";
+import { mockServer } from "../../setup.js";
+import { makeItem } from "../../mocks/fixtures/items.js";
 import { HttpClient } from "../../../src/client/http-client.js";
 import { CodebeamerClient } from "../../../src/client/codebeamer-client.js";
 import {
@@ -21,12 +24,24 @@ describe("search_items", () => {
   it("returns formatted search results", async () => {
     const client = makeClient();
     const result = await client.searchItems('tracker.id IN (100)', 1, 25);
-    const text = formatItemList(result);
+    const text = formatItemList(result.items, { total: result.total, page: 1, pageSize: 25 });
 
-    expect(text).toContain("## Items");
-    expect(text).toContain("2 total");
+    expect(text).toContain("## Items (2)");
     expect(text).toContain("Login button does not respond");
     expect(text).toContain("Another bug");
+  });
+
+  it("reports the API total from paginated query results", async () => {
+    mockServer.use(
+      http.get(`${BASE}/items/query`, () =>
+        HttpResponse.json({ items: [makeItem()], page: 1, pageSize: 1, total: 42 }),
+      ),
+    );
+    const client = makeClient();
+    const result = await client.searchItems("tracker.id IN (100)", 1, 1);
+
+    expect(result.total).toBe(42);
+    expect(formatItemList(result.items, { total: result.total, page: 1, pageSize: 1 })).toContain("1 of 42");
   });
 });
 

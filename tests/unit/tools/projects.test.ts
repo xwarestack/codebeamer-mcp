@@ -17,7 +17,7 @@ function makeClient() {
 describe("list_projects", () => {
   it("returns formatted project list", async () => {
     const client = makeClient();
-    const result = await client.listProjects(1, 25);
+    const result = await client.listProjects();
     const text = formatProjectList(result);
 
     expect(text).toContain("## Projects");

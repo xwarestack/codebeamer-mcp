@@ -6,22 +6,42 @@ import type {
   CbTestStep,
 } from "../client/codebeamer-client.js";
 
-export function formatItemList(items: CbItem[]): string {
-  const header = `## Items (${items.length} total)\n`;
+export interface PageInfo {
+  total?: number;
+  page: number;
+  pageSize: number;
+}
+
+export function formatItemList(items: CbItem[], paging?: PageInfo): string {
+  const total = paging?.total;
+  const header =
+    total !== undefined && paging
+      ? `## Items (${items.length} of ${total}, page ${paging.page})\n`
+      : `## Items (${items.length})\n`;
 
   if (items.length === 0) return `${header}\n_No items found._`;
 
   const rows = items.map(
     (item) =>
-      `| ${item.id} | ${item.name} | ${item.status?.name ?? "-"} | ${item.priority?.name ?? "-"} | ${item.assignedTo?.map((u) => u.name).join(", ") || "-"} |`,
+      `| ${item.id} | ${cell(item.name)} | ${item.status?.name ?? "-"} | ${item.priority?.name ?? "-"} | ${item.assignedTo?.map((u) => u.name).join(", ") || "-"} |`,
   );
 
-  return [
+  const lines = [
     header,
     "| ID | Summary | Status | Priority | Assigned To |",
     "|----|---------|--------|----------|-------------|",
     ...rows,
-  ].join("\n");
+  ];
+  if (total !== undefined && paging && paging.page * paging.pageSize < total) {
+    lines.push("", `_More items available: request page ${paging.page + 1}._`);
+  }
+  return lines.join("\n");
+}
+
+/** Escape a value for use inside a markdown table cell. */
+export function cell(value: string | number | undefined | null): string {
+  if (value === undefined || value === null || value === "") return "-";
+  return String(value).replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 }
 
 export function formatItemSummary(item: CbItem): string {
