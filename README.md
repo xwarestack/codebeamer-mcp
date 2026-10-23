@@ -98,7 +98,7 @@ Every tool carries MCP annotations (`readOnlyHint` / `destructiveHint`), so clie
 
 ### Quick start (Claude Code)
 
-One-time setup; afterwards the server is available in every Claude Code session (CLI and VS Code) from any folder:
+One-time setup; afterward the server is available in every Claude Code session (CLI and VS Code) from any folder:
 
 ```bash
 git clone https://github.com/xwarestack/codebeamer-mcp.git
