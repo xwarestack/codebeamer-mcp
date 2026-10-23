@@ -267,3 +267,57 @@ describe("matchTrackersByName", () => {
     expect(result.onlyInB.map((t) => t.name)).toEqual(["Test Cases"]);
   });
 });
+
+describe("resolveLookups", () => {
+  const snapshot = (field: object, schema: object[]) =>
+    ({
+      trackerId: 950,
+      warnings: [],
+      config: { basicInformation: { trackerId: 950, projectId: 1, name: "Lookup Probe" }, fields: [field] },
+      schema,
+    }) as never;
+
+  it("fetches role names for member filters on non-PROJECT domains, even when only the schema identifies the field", async () => {
+    const lookups = await resolveLookups(
+      makeClient(),
+      [
+        snapshot(
+          {
+            referenceId: 40,
+            label: "Reviewers",
+            typeId: 5,
+            // No setting type: the field counts as a member field via its schema type alone.
+            choiceOptionSetting: { referenceFilters: [{ domainType: "TRACKER", domainId: 902, targetIds: [5] }] },
+          },
+          [{ id: 40, name: "Reviewers", type: "UserChoiceField" }],
+        ),
+      ],
+    );
+
+    expect(lookups.roles.get(5)).toBe("Developer");
+    expect(lookups.trackerTypes.size).toBe(0);
+  });
+
+  it("fetches tracker types, not roles, for PROJECT item filters", async () => {
+    const lookups = await resolveLookups(
+      makeClient(),
+      [
+        snapshot(
+          {
+            referenceId: 41,
+            label: "Verifies",
+            typeId: 7,
+            choiceOptionSetting: {
+              type: "CHOICE_TRACKERS",
+              referenceFilters: [{ domainType: "PROJECT", domainId: 1, targetIds: [1] }],
+            },
+          },
+          [{ id: 41, name: "Verifies", type: "TrackerItemChoiceField" }],
+        ),
+      ],
+    );
+
+    expect(lookups.trackerTypes.get(1)).toBe("Requirement");
+    expect(lookups.roles.size).toBe(0);
+  });
+});

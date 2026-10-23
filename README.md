@@ -96,6 +96,23 @@ Every tool carries MCP annotations (`readOnlyHint` / `destructiveHint`), so clie
 
 ## Installation
 
+### Quick start (Claude Code)
+
+One-time setup; afterward the server is available in every Claude Code session (CLI and VS Code) from any folder:
+
+```bash
+git clone https://github.com/xwarestack/codebeamer-mcp.git
+cd codebeamer-mcp
+npm ci && npm run build
+
+claude mcp add codebeamer --scope user \
+  -e CB_URL=https://your-instance.example.com/cb/api \
+  -e CB_USERNAME=your_username -e CB_PASSWORD=your_password \
+  -- node "$(pwd)/dist/index.js"
+```
+
+There is nothing to deploy or keep running: the MCP client starts and stops the server automatically in each session. Verify with `/mcp` inside a session **started in another folder** — inside the clone itself, the repository's own [.mcp.json](.mcp.json) takes precedence and expects the `CB_*` environment variables to be set (see [2a](#2a-claude-code-cli-or-vs-code-extension)). Then ask e.g. *"List the Codebeamer projects"*. Rebuild (`npm run build`) only after pulling new code. Details and other clients (Claude Desktop, Copilot, Cursor, …) below.
+
 ### Requirements
 
 - Node.js 20+ and Git

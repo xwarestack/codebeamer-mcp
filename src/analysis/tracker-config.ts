@@ -84,6 +84,12 @@ function hasRoleGrants(permission: CbFieldPermission | undefined): boolean {
   return grants.some((g) => g.subjectType === "ROLE");
 }
 
+/**
+ * Fetches the names a set of snapshots needs to be readable and comparable: reference-filter
+ * targets (trackers/projects), and — only where some filter or grant actually uses them — role
+ * and tracker-type names. Lookups that cannot be fetched are simply left empty; rendering then
+ * falls back to IDs.
+ */
 export async function resolveLookups(
   client: CodebeamerClient,
   snapshots: TrackerSnapshot[],
@@ -105,13 +111,19 @@ export async function resolveLookups(
   let needsTrackerTypes = false;
   for (const s of snapshots) {
     needsRoles ||= (s.transitions ?? []).some((t) => (t.permissions ?? []).some((p) => p.role && !p.role.name));
+    const schemaById = new Map(s.schema.map((f) => [f.id, f]));
     for (const field of s.config.fields ?? []) {
       needsRoles ||= hasRoleGrants(field.permission);
+      // Classify exactly as normalizeTracker does, so every filter normalized as "members" gets role names.
+      const fieldId = configFieldId(field);
+      const sf = fieldId === undefined ? undefined : schemaById.get(fieldId);
+      const userChoice = referenceKind(field.choiceOptionSetting?.type, sf?.type) === "members";
       for (const ref of field.choiceOptionSetting?.referenceFilters ?? []) {
-        // PROJECT targets are tracker types (item fields) or roles (user/member fields).
-        if (ref.domainType === "PROJECT" && (ref.targetIds?.length ?? 0) > 0) {
-          needsTrackerTypes = true;
-          needsRoles = true;
+        // Member filters carry role IDs on every domain; PROJECT item filters carry tracker type
+        // IDs. Other item filters' IDs have no lookup and render as a raw `targets` constraint.
+        if ((ref.targetIds?.length ?? 0) > 0) {
+          if (userChoice) needsRoles = true;
+          else if (ref.domainType === "PROJECT") needsTrackerTypes = true;
         }
         if (ref.domainId === undefined || !ref.domainType) continue;
         const key = `${ref.domainType}:${ref.domainId}`;
@@ -179,9 +191,10 @@ export interface NormalizedReference {
   targetProjectName?: string;
   /** Whether the target tracker or project is the referencing tracker's own project; undefined if unknown. */
   ownProject?: boolean;
-  /** Tracker type IDs (item references) or role IDs (member references) for PROJECT references. */
+  /** Tracker type IDs (item references) or role IDs (member references). */
   targetIds: number[];
-  /** Names of `targetIds`: tracker type names or role names. */
+  /** Names of `targetIds`: role names (member filters) or tracker type names (PROJECT item filters).
+   * Empty when the IDs' meaning is unknown; they then render as a raw `targets` constraint. */
   targetTypeNames: string[];
   filterId?: number;
   filterStatusId?: number;
@@ -438,11 +451,11 @@ export function normalizeTracker(snapshot: TrackerSnapshot, lookups: Lookups = e
           ownProject,
           targetIds,
           targetTypeNames:
-            r.domainType !== "PROJECT"
-              ? []
-              : kind === "members"
-                ? targetIds.map((id) => lookups.roles.get(id) ?? `role #${id}`)
-                : targetIds.map((id) => lookups.trackerTypes.get(id) ?? `type #${id}`),
+            kind === "members"
+              ? targetIds.map((id) => lookups.roles.get(id) ?? `role #${id}`)
+              : r.domainType === "PROJECT"
+                ? targetIds.map((id) => lookups.trackerTypes.get(id) ?? `type #${id}`)
+                : [],
           filterId: r.filterId,
           filterStatusId: r.filterStatusId,
           targetPermissions: [...(r.targetPermissions ?? [])].sort(),
@@ -484,10 +497,16 @@ export function normalizeTracker(snapshot: TrackerSnapshot, lookups: Lookups = e
   };
 }
 
+/** Renders a filter's extra constraints (unresolved target IDs, filter, status, permissions) for both display and comparison keys. */
 function referenceConstraints(ref: NormalizedReference): string {
   const constraints = [
-    ref.filterId ? `filter ${ref.filterId}` : "",
-    ref.filterStatusId ? `filter status ${ref.filterStatusId}` : "",
+    // Target IDs whose meaning is unknown (item filters on non-PROJECT domains) must still show,
+    // so trackers whose filters differ only in them compare as different.
+    ref.targetIds.length > 0 && ref.targetTypeNames.length === 0
+      ? `targets ${[...ref.targetIds].sort((a, b) => a - b).join(",")}`
+      : "",
+    ref.filterId != null ? `filter ${ref.filterId}` : "",
+    ref.filterStatusId != null ? `filter status ${ref.filterStatusId}` : "",
     ref.targetPermissions.length > 0 ? `permissions ${ref.targetPermissions.join(",")}` : "",
   ].filter(Boolean);
   return constraints.length > 0 ? ` (${constraints.join(", ")})` : "";
@@ -501,6 +520,7 @@ function anyTarget(ref: NormalizedReference): string {
   return ref.kind === "members" ? "any user" : ref.kind === "projects" ? "any project" : "any item";
 }
 
+/** Human-readable description of one reference filter, e.g. `trackers of type "Test Set" in own project`. */
 export function describeReference(ref: NormalizedReference): string {
   const named = (kind: string) =>
     `${kind} ${ref.domainName ? `"${ref.domainName}" [${ref.domainId}]` : `[${ref.domainId ?? "?"}]`}`;
@@ -526,7 +546,9 @@ export function describeReference(ref: NormalizedReference): string {
 
 // Comparable across projects: targets are identified by name plus whether they are in the referencing
 // tracker's own project. Two projects set up alike compare equal, while a copied project that still
-// points at the original project's tracker shows up as a difference.
+// points at the original project's tracker shows up as a difference. Exception: target IDs with no
+// known name (the raw `targets` constraint) compare verbatim and may flag copies whose local IDs
+// differ — preferred over hiding a possible difference entirely.
 function referenceKey(ref: NormalizedReference): string {
   const project = (name: string | undefined) => (ref.ownProject ? "own project" : `project ${name ?? `#${ref.domainId}`}`);
   let key: string;
