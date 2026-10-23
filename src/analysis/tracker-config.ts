@@ -107,11 +107,13 @@ export async function resolveLookups(
     needsRoles ||= (s.transitions ?? []).some((t) => (t.permissions ?? []).some((p) => p.role && !p.role.name));
     for (const field of s.config.fields ?? []) {
       needsRoles ||= hasRoleGrants(field.permission);
+      const userChoice = /USER|MEMBER/i.test(field.choiceOptionSetting?.type ?? "");
       for (const ref of field.choiceOptionSetting?.referenceFilters ?? []) {
-        // PROJECT targets are tracker types (item fields) or roles (user/member fields).
-        if (ref.domainType === "PROJECT" && (ref.targetIds?.length ?? 0) > 0) {
-          needsTrackerTypes = true;
-          needsRoles = true;
+        // PROJECT targets are tracker types (item fields) or roles (user/member fields);
+        // member filters on other domains also carry role IDs.
+        if ((ref.targetIds?.length ?? 0) > 0) {
+          if (ref.domainType === "PROJECT") needsTrackerTypes = true;
+          if (ref.domainType === "PROJECT" || userChoice) needsRoles = true;
         }
         if (ref.domainId === undefined || !ref.domainType) continue;
         const key = `${ref.domainType}:${ref.domainId}`;
@@ -179,9 +181,10 @@ export interface NormalizedReference {
   targetProjectName?: string;
   /** Whether the target tracker or project is the referencing tracker's own project; undefined if unknown. */
   ownProject?: boolean;
-  /** Tracker type IDs (item references) or role IDs (member references) for PROJECT references. */
+  /** Tracker type IDs (item references) or role IDs (member references). */
   targetIds: number[];
-  /** Names of `targetIds`: tracker type names or role names. */
+  /** Names of `targetIds`: role names (member filters) or tracker type names (PROJECT item filters).
+   * Empty when the IDs' meaning is unknown; they then render as a raw `targets` constraint. */
   targetTypeNames: string[];
   filterId?: number;
   filterStatusId?: number;
@@ -438,11 +441,11 @@ export function normalizeTracker(snapshot: TrackerSnapshot, lookups: Lookups = e
           ownProject,
           targetIds,
           targetTypeNames:
-            r.domainType !== "PROJECT"
-              ? []
-              : kind === "members"
-                ? targetIds.map((id) => lookups.roles.get(id) ?? `role #${id}`)
-                : targetIds.map((id) => lookups.trackerTypes.get(id) ?? `type #${id}`),
+            kind === "members"
+              ? targetIds.map((id) => lookups.roles.get(id) ?? `role #${id}`)
+              : r.domainType === "PROJECT"
+                ? targetIds.map((id) => lookups.trackerTypes.get(id) ?? `type #${id}`)
+                : [],
           filterId: r.filterId,
           filterStatusId: r.filterStatusId,
           targetPermissions: [...(r.targetPermissions ?? [])].sort(),
@@ -486,6 +489,11 @@ export function normalizeTracker(snapshot: TrackerSnapshot, lookups: Lookups = e
 
 function referenceConstraints(ref: NormalizedReference): string {
   const constraints = [
+    // Target IDs whose meaning is unknown (item filters on non-PROJECT domains) must still show,
+    // so trackers whose filters differ only in them compare as different.
+    ref.targetIds.length > 0 && ref.targetTypeNames.length === 0
+      ? `targets ${[...ref.targetIds].sort((a, b) => a - b).join(",")}`
+      : "",
     ref.filterId ? `filter ${ref.filterId}` : "",
     ref.filterStatusId ? `filter status ${ref.filterStatusId}` : "",
     ref.targetPermissions.length > 0 ? `permissions ${ref.targetPermissions.join(",")}` : "",
