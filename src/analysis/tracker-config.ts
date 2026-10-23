@@ -105,9 +105,13 @@ export async function resolveLookups(
   let needsTrackerTypes = false;
   for (const s of snapshots) {
     needsRoles ||= (s.transitions ?? []).some((t) => (t.permissions ?? []).some((p) => p.role && !p.role.name));
+    const schemaById = new Map(s.schema.map((f) => [f.id, f]));
     for (const field of s.config.fields ?? []) {
       needsRoles ||= hasRoleGrants(field.permission);
-      const userChoice = /USER|MEMBER/i.test(field.choiceOptionSetting?.type ?? "");
+      // Classify exactly as normalizeTracker does, so every filter normalized as "members" gets role names.
+      const fieldId = configFieldId(field);
+      const sf = fieldId === undefined ? undefined : schemaById.get(fieldId);
+      const userChoice = referenceKind(field.choiceOptionSetting?.type, sf?.type) === "members";
       for (const ref of field.choiceOptionSetting?.referenceFilters ?? []) {
         // PROJECT targets are tracker types (item fields) or roles (user/member fields);
         // member filters on other domains also carry role IDs.
