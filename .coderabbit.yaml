@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+language: "en-US"
+reviews:
+  profile: "chill"
+  high_level_summary: true
+  poem: false
+  auto_review:
+    enabled: true
+    drafts: false
+  path_instructions:
+    - path: "src/**/*.ts"
+      instructions: |
+        TypeScript ESM MCP server for the Codebeamer REST v3 API. Check that:
+        - Access classification for api_call (openapi/catalog.ts) stays conservative: only GET and
+          query-style POSTs are "read"; mutations of tracker configuration, permissions or
+          deployment are "admin", never "write".
+        - Built-in fields are matched by identity (legacyRestName/trackerItemField) and custom
+          fields by name, never by ID — custom field IDs start at 10000 in every tracker.
+        - Comparison keys (referenceKey, compareFields) stay comparable across projects:
+          name-based wherever names exist.
+        - Missing schema, transitions or permissions degrade to warnings, not failures.
+        - API response shapes are inconsistent (arrays, {items}, {itemRefs}); go through
+          toArray() rather than assuming one shape.
+    - path: "tests/**"
+      instructions: |
+        Tests use MSW; no real Codebeamer instance. Literal routes must be registered before
+        parameterised ones in handlers.ts. Fixtures must be fully synthetic: never accept data
+        copied from a real customer instance (project/tracker names, IDs, hostnames).
+    - path: "docs/codebeamer-openapi-v3.json"
+      instructions: |
+        The bundled OpenAPI spec must never contain a customer's internal hostname; the servers
+        URL stays a placeholder.
+chat:
+  auto_reply: true

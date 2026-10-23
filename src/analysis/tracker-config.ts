@@ -113,11 +113,11 @@ export async function resolveLookups(
       const sf = fieldId === undefined ? undefined : schemaById.get(fieldId);
       const userChoice = referenceKind(field.choiceOptionSetting?.type, sf?.type) === "members";
       for (const ref of field.choiceOptionSetting?.referenceFilters ?? []) {
-        // PROJECT targets are tracker types (item fields) or roles (user/member fields);
-        // member filters on other domains also carry role IDs.
+        // Member filters carry role IDs on every domain; PROJECT item filters carry tracker type
+        // IDs. Other item filters' IDs have no lookup and render as a raw `targets` constraint.
         if ((ref.targetIds?.length ?? 0) > 0) {
-          if (ref.domainType === "PROJECT") needsTrackerTypes = true;
-          if (ref.domainType === "PROJECT" || userChoice) needsRoles = true;
+          if (userChoice) needsRoles = true;
+          else if (ref.domainType === "PROJECT") needsTrackerTypes = true;
         }
         if (ref.domainId === undefined || !ref.domainType) continue;
         const key = `${ref.domainType}:${ref.domainId}`;
@@ -498,8 +498,8 @@ function referenceConstraints(ref: NormalizedReference): string {
     ref.targetIds.length > 0 && ref.targetTypeNames.length === 0
       ? `targets ${[...ref.targetIds].sort((a, b) => a - b).join(",")}`
       : "",
-    ref.filterId ? `filter ${ref.filterId}` : "",
-    ref.filterStatusId ? `filter status ${ref.filterStatusId}` : "",
+    ref.filterId != null ? `filter ${ref.filterId}` : "",
+    ref.filterStatusId != null ? `filter status ${ref.filterStatusId}` : "",
     ref.targetPermissions.length > 0 ? `permissions ${ref.targetPermissions.join(",")}` : "",
   ].filter(Boolean);
   return constraints.length > 0 ? ` (${constraints.join(", ")})` : "";
@@ -538,7 +538,9 @@ export function describeReference(ref: NormalizedReference): string {
 
 // Comparable across projects: targets are identified by name plus whether they are in the referencing
 // tracker's own project. Two projects set up alike compare equal, while a copied project that still
-// points at the original project's tracker shows up as a difference.
+// points at the original project's tracker shows up as a difference. Exception: target IDs with no
+// known name (the raw `targets` constraint) compare verbatim and may flag copies whose local IDs
+// differ — preferred over hiding a possible difference entirely.
 function referenceKey(ref: NormalizedReference): string {
   const project = (name: string | undefined) => (ref.ownProject ? "own project" : `project ${name ?? `#${ref.domainId}`}`);
   let key: string;
