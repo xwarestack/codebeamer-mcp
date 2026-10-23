@@ -84,6 +84,12 @@ function hasRoleGrants(permission: CbFieldPermission | undefined): boolean {
   return grants.some((g) => g.subjectType === "ROLE");
 }
 
+/**
+ * Fetches the names a set of snapshots needs to be readable and comparable: reference-filter
+ * targets (trackers/projects), and — only where some filter or grant actually uses them — role
+ * and tracker-type names. Lookups that cannot be fetched are simply left empty; rendering then
+ * falls back to IDs.
+ */
 export async function resolveLookups(
   client: CodebeamerClient,
   snapshots: TrackerSnapshot[],
@@ -491,6 +497,7 @@ export function normalizeTracker(snapshot: TrackerSnapshot, lookups: Lookups = e
   };
 }
 
+/** Renders a filter's extra constraints (unresolved target IDs, filter, status, permissions) for both display and comparison keys. */
 function referenceConstraints(ref: NormalizedReference): string {
   const constraints = [
     // Target IDs whose meaning is unknown (item filters on non-PROJECT domains) must still show,
@@ -513,6 +520,7 @@ function anyTarget(ref: NormalizedReference): string {
   return ref.kind === "members" ? "any user" : ref.kind === "projects" ? "any project" : "any item";
 }
 
+/** Human-readable description of one reference filter, e.g. `trackers of type "Test Set" in own project`. */
 export function describeReference(ref: NormalizedReference): string {
   const named = (kind: string) =>
     `${kind} ${ref.domainName ? `"${ref.domainName}" [${ref.domainId}]` : `[${ref.domainId ?? "?"}]`}`;
